@@ -168,7 +168,8 @@ Once online, you can control NEXUS AI using voice commands or the keyboard.
 
 ### Main Interface
 *Sleek, responsive dashboard showing system resources, prompt inputs, and active session streams.*
-![Main Interface Placeholder](https://via.placeholder.com/980x700.png?text=NEXUS+AI+Dashboard+Interface)
+![Main Interface Placeholder]<img width="1919" height="1031" alt="image" src="https://github.com/user-attachments/assets/55289f22-13c9-4943-95c7-ce5e2e8bd4c0" />
+
 
 ### Voice Assistant
 *Visual indicator showing connection status, audio activity, and Live API speech feeds.*
