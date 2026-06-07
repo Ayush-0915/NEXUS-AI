@@ -31,6 +31,7 @@ from actions.dev_agent         import dev_agent
 from actions.web_search        import web_search as web_search_action
 from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
+from actions.system_info       import get_system_info, is_system_info_query
 
 
 def get_base_dir():
@@ -489,6 +490,20 @@ TOOL_DECLARATIONS = [
             "required": ["category", "key", "value"]
         }
     },
+    {
+        "name": "get_system_info",
+        "description": "Inspects the local system hardware, software, battery, and network configurations to return real-time system specifications.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "component": {
+                    "type": "STRING",
+                    "description": "Optional component to query: 'cpu' | 'ram' | 'gpu' | 'storage' | 'os' | 'battery' | 'network' | 'device' | 'all' (default: 'all')"
+                }
+            },
+            "required": []
+        }
+    },
 ]
 
 
@@ -507,6 +522,13 @@ class NexusLive:
     def _on_text_command(self, text: str):
         if not self._loop or not self.session:
             return
+
+        if is_system_info_query(text):
+            result = get_system_info(parameters={}, player=self.ui)
+            self.ui.write_log(result)
+            self.speak("Here is your local system report.")
+            return
+
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
                 turns={"parts": [{"text": text}]},
@@ -679,6 +701,10 @@ class NexusLive:
             elif name == "game_updater":
                 r = await loop.run_in_executor(None, lambda: game_updater(parameters=args, player=self.ui, speak=self.speak))
                 result = r or "Done."
+
+            elif name == "get_system_info":
+                r = await loop.run_in_executor(None, lambda: get_system_info(parameters=args, player=self.ui))
+                result = r or "System specifications gathered."
 
             elif name == "flight_finder":
                 r = await loop.run_in_executor(None, lambda: flight_finder(parameters=args, player=self.ui))

@@ -115,6 +115,9 @@ code_helper
 dev_agent
   description: string (required)
   language: string (optional)
+
+get_system_info
+  component: string (optional) — "cpu" | "ram" | "gpu" | "storage" | "os" | "battery" | "network" | "device" | "all"
 EXAMPLES:
 
 Goal: "research mechanical engineering and save it to a notepad file"
