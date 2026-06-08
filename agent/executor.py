@@ -274,9 +274,68 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
         from actions.flight_finder import flight_finder
         return flight_finder(parameters=parameters, player=None, speak=speak) or "Done."
 
+    elif tool == "analyze_screen":
+        from actions.vision_engine import analyze_screen
+        res = analyze_screen(parameters.get("query", "Analyze screen"))
+        if speak:
+            speak("Screen analyzed.")
+        if speak and res.get("active_window"):
+            speak(f"Active window is {res['active_window']['title']}")
+        if player:
+            player.show_vision_panel()
+            player.update_vision_panel(res)
+        return "Screen analyzed."
+
+    elif tool == "extract_screen_text":
+        from actions.vision_engine import extract_screen_text
+        res = extract_screen_text()
+        if player:
+            player.show_vision_panel()
+            from actions.vision_engine import analyze_screen
+            player.update_vision_panel(analyze_screen())
+        return res
+
+    elif tool == "describe_current_window":
+        from actions.vision_engine import describe_current_window
+        res = describe_current_window()
+        if player:
+            player.show_vision_panel()
+            from actions.vision_engine import analyze_screen
+            player.update_vision_panel(analyze_screen())
+        return res
+
+    elif tool == "explain_error_on_screen":
+        from actions.vision_engine import explain_error_on_screen
+        res = explain_error_on_screen()
+        if player:
+            player.show_vision_panel()
+            from actions.vision_engine import analyze_screen
+            player.update_vision_panel(analyze_screen())
+        return res
+
+    elif tool == "detect_ui_elements":
+        from actions.vision_engine import detect_ui_elements
+        res = detect_ui_elements()
+        if player:
+            player.show_vision_panel()
+            from actions.vision_engine import analyze_screen
+            player.update_vision_panel(analyze_screen())
+        return res
+
+    elif tool == "vision_assistant":
+        from actions.vision_engine import vision_assistant
+        if player:
+            player.show_vision_panel()
+        res = vision_assistant(parameters.get("query", ""))
+        if player:
+            from actions.vision_engine import analyze_screen
+            player.update_vision_panel(analyze_screen())
+        return res
+
     else:
         print(f"[Executor] ⚠️ Unknown tool '{tool}' — falling back to generated_code")
         return _run_generated_code(f"Accomplish this task: {parameters}", speak=speak)
+
 
 class AgentExecutor:
 

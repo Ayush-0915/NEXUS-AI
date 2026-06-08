@@ -25,7 +25,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QTextEdit,
-    QVBoxLayout, QWidget, QProgressBar, QComboBox,
+    QVBoxLayout, QWidget, QProgressBar, QComboBox, QGridLayout, QMessageBox,
 )
 
 def _base_dir() -> Path:
@@ -1435,10 +1435,216 @@ class PerformanceMonitorWindow(QWidget):
         super().closeEvent(event)
 
 
+class VisionIntelligenceWindow(QWidget):
+    _sig_update = pyqtSignal(dict)
+    _sig_ask_consent = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(None)  # Standalone floating window
+        self.setWindowTitle("NEXUS AI Vision Intelligence")
+        self.resize(520, 620)
+        self.setMinimumSize(450, 500)
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: {C.BG};
+                color: {C.TEXT};
+                font-family: 'Courier New';
+            }}
+            QFrame {{
+                border: 1px solid {C.BORDER};
+                border-radius: 6px;
+                background-color: {C.PANEL};
+            }}
+            QLabel {{
+                border: none;
+                background: transparent;
+            }}
+            QTextEdit {{
+                background-color: #000d14;
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+                border-radius: 4px;
+                padding: 6px;
+            }}
+            QPushButton {{
+                background-color: {C.PANEL2};
+                color: {C.PRI};
+                border: 1px solid {C.BORDER_A};
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {C.PRI_GHO};
+                border: 1px solid {C.PRI};
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        # Title
+        title_lbl = QLabel("◈ NEXUS AI VISION INTELLIGENCE")
+        title_lbl.setFont(QFont("Courier New", 11, QFont.Weight.Bold))
+        title_lbl.setStyleSheet(f"color: {C.PRI};")
+        title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title_lbl)
+
+        # Active Window Frame
+        win_frame = QFrame()
+        win_lay = QVBoxLayout(win_frame)
+        win_lay.setContentsMargins(10, 8, 10, 8)
+        self.win_lbl = QLabel("Active Window: Gathering...")
+        self.win_lbl.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        self.win_lbl.setWordWrap(True)
+        self.proc_lbl = QLabel("Process: --")
+        self.proc_lbl.setFont(QFont("Courier New", 8))
+        self.proc_lbl.setStyleSheet(f"color: {C.TEXT_DIM};")
+        win_lay.addWidget(self.win_lbl)
+        win_lay.addWidget(self.proc_lbl)
+        layout.addWidget(win_frame)
+
+        # Summary / Analysis Area
+        layout.addWidget(QLabel("ANALYSIS SUMMARY:"))
+        self.summary_edit = QTextEdit()
+        self.summary_edit.setReadOnly(True)
+        self.summary_edit.setFont(QFont("Courier New", 9))
+        layout.addWidget(self.summary_edit, stretch=2)
+
+        # OCR Detected Text Area
+        layout.addWidget(QLabel("DETECTED TEXT (OCR):"))
+        self.ocr_edit = QTextEdit()
+        self.ocr_edit.setReadOnly(True)
+        self.ocr_edit.setFont(QFont("Courier New", 8))
+        layout.addWidget(self.ocr_edit, stretch=2)
+
+        # Error notification / Suggested Actions
+        self.err_frame = QFrame()
+        self.err_frame.setStyleSheet(f"QFrame {{ border: 1px solid {C.RED}; background-color: #1a0005; }}")
+        err_lay = QVBoxLayout(self.err_frame)
+        err_lay.setContentsMargins(10, 8, 10, 8)
+        self.err_lbl = QLabel("No errors detected.")
+        self.err_lbl.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        self.err_lbl.setStyleSheet(f"color: {C.MUTED_C};")
+        self.err_lbl.setWordWrap(True)
+        self.fix_lbl = QLabel("")
+        self.fix_lbl.setFont(QFont("Courier New", 8))
+        self.fix_lbl.setStyleSheet(f"color: {C.ACC2};")
+        self.fix_lbl.setWordWrap(True)
+        err_lay.addWidget(self.err_lbl)
+        err_lay.addWidget(self.fix_lbl)
+        layout.addWidget(self.err_frame)
+        self.err_frame.hide()
+
+        # Diagnostics Panel
+        diag_frame = QFrame()
+        diag_lay = QGridLayout(diag_frame)
+        diag_lay.setContentsMargins(8, 8, 8, 8)
+        diag_lay.setSpacing(6)
+
+        def _d_lbl(t, col=C.TEXT_DIM):
+            l = QLabel(t)
+            l.setFont(QFont("Courier New", 8))
+            l.setStyleSheet(f"color: {col};")
+            return l
+
+        diag_lay.addWidget(_d_lbl("OCR Status:"), 0, 0)
+        self.diag_ocr = _d_lbl("--", C.TEXT)
+        diag_lay.addWidget(self.diag_ocr, 0, 1)
+
+        diag_lay.addWidget(_d_lbl("Last Analysis:"), 0, 2)
+        self.diag_time = _d_lbl("--", C.TEXT)
+        diag_lay.addWidget(self.diag_time, 0, 3)
+
+        diag_lay.addWidget(_d_lbl("Cache Size:"), 1, 0)
+        self.diag_cache = _d_lbl("--", C.TEXT)
+        diag_lay.addWidget(self.diag_cache, 1, 1)
+
+        diag_lay.addWidget(_d_lbl("Duration:"), 1, 2)
+        self.diag_duration = _d_lbl("--", C.TEXT)
+        diag_lay.addWidget(self.diag_duration, 1, 3)
+
+        layout.addWidget(diag_frame)
+
+        # Trigger Signals
+        self._sig_update.connect(self._on_update)
+        self._sig_ask_consent.connect(self._on_ask_consent)
+
+        self._consent_granted = False
+        self._consent_event = threading.Event()
+
+    def _on_update(self, data: dict):
+        # Update Window Details
+        win = data.get("active_window", {})
+        self.win_lbl.setText(f"Active Window: {win.get('title', 'Unknown')}")
+        self.proc_lbl.setText(f"Process: {win.get('process_name', 'Unknown')} ({win.get('app_type', 'Unknown')})")
+
+        # Update Summary/Analysis
+        summary_text = ""
+        if win.get("special_info"):
+            summary_text += "Special Context:\n"
+            for k, v in win["special_info"].items():
+                summary_text += f"  {k.replace('_', ' ').capitalize()}: {v}\n"
+            summary_text += "\n"
+
+        # UI Elements
+        ui_els = data.get("ui_elements", [])
+        if ui_els:
+            summary_text += "Detected UI Elements:\n"
+            for el in ui_els:
+                summary_text += f"  - [{el['type']}] {el['label']}\n"
+        else:
+            summary_text += "No standard UI elements detected locally.\n"
+
+        self.summary_edit.setText(summary_text)
+
+        # Update OCR Text
+        ocr_text = data.get("ocr_text", "")
+        self.ocr_edit.setText(ocr_text if ocr_text else "(No text extracted locally)")
+
+        # Update Errors
+        err = data.get("error")
+        if err:
+            self.err_frame.show()
+            self.err_lbl.setText(f"Detected Error: {err.get('error_type', 'Unknown')}")
+            self.fix_lbl.setText(f"Cause: {err.get('cause', 'Unknown')}\nRecommended Fix: {err.get('fix', 'Unknown')}")
+        else:
+            self.err_frame.hide()
+
+        # Update Diagnostics
+        from actions.vision_engine import get_diagnostics
+        diag = get_diagnostics()
+        self.diag_ocr.setText(diag.get("ocr_status", "--"))
+        self.diag_time.setText(diag.get("last_analysis_time", "--"))
+        self.diag_cache.setText(diag.get("screenshot_cache_size", "--"))
+        self.diag_duration.setText(diag.get("processing_duration", "--"))
+
+    def _on_ask_consent(self):
+        reply = QMessageBox.question(
+            self,
+            "NEXUS AI - Cloud Analysis Consent",
+            "Local OCR dependencies are unavailable.\n\n"
+            "Do you consent to uploading a screenshot of your screen to OpenRouter/Gemini for advanced visual analysis?\n"
+            "This will send a single screen capture to the cloud.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        self._consent_granted = (reply == QMessageBox.StandardButton.Yes)
+        self._consent_event.set()
+
+    def request_consent_sync(self) -> bool:
+        self._consent_event.clear()
+        self._sig_ask_consent.emit()
+        self._consent_event.wait()
+        return self._consent_granted
+
+
 class MainWindow(QMainWindow):
     _log_sig   = pyqtSignal(str)
     _state_sig = pyqtSignal(str)
     _show_perf_sig = pyqtSignal(bool)
+    _show_vision_sig = pyqtSignal(bool)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -1496,6 +1702,7 @@ class MainWindow(QMainWindow):
         self._log_sig.connect(self._log.append_log)
         self._state_sig.connect(self._apply_state)
         self._show_perf_sig.connect(self._handle_perf_monitor)
+        self._show_vision_sig.connect(self._handle_vision_panel)
 
         self._overlay: SetupOverlay | None = None
         self._ready = self._check_config()
@@ -1527,6 +1734,23 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 self._perf_win = None
+
+    def _handle_vision_panel(self, open_window: bool):
+        if open_window:
+            if not hasattr(self, "_vision_win") or self._vision_win is None:
+                self._vision_win = VisionIntelligenceWindow()
+                import actions.vision_engine as ve
+                ve.set_consent_callback(self._vision_win.request_consent_sync)
+            self._vision_win.show()
+            self._vision_win.raise_()
+            self._vision_win.activateWindow()
+        else:
+            if hasattr(self, "_vision_win") and self._vision_win is not None:
+                try:
+                    self._vision_win.close()
+                except Exception:
+                    pass
+                self._vision_win = None
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1982,6 +2206,16 @@ class NexusAIUI:
 
     def close_performance_monitor(self):
         self._win._show_perf_sig.emit(False)
+
+    def show_vision_panel(self):
+        self._win._show_vision_sig.emit(True)
+
+    def close_vision_panel(self):
+        self._win._show_vision_sig.emit(False)
+
+    def update_vision_panel(self, data: dict):
+        if hasattr(self._win, "_vision_win") and self._win._vision_win is not None:
+            self._win._vision_win._sig_update.emit(data)
 
 
 # Compatibility alias

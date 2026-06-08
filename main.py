@@ -590,6 +590,30 @@ class NexusLive:
         if not self._loop or not self.session:
             return
 
+        t_lower = text.lower().strip()
+        vision_keywords = [
+            "what is on my screen", "what is on screen", "analyze my screen", "analyze the screen",
+            "describe current window", "describe my active window", "explain this error",
+            "explain the error", "read screen text", "read text on screen", "read this page",
+            "detect ui elements", "detect elements on screen"
+        ]
+        
+        is_vision = any(kw in t_lower for kw in vision_keywords)
+        if is_vision:
+            def run_vision_worker():
+                self.ui.set_state("PROCESSING")
+                self.ui.show_vision_panel()
+                
+                from actions.vision_engine import vision_assistant, analyze_screen
+                result = vision_assistant(text)
+                
+                self.ui.write_log(f"NEXUS: {result}")
+                self.ui.update_vision_panel(analyze_screen())
+                self.speak(result)
+                
+            threading.Thread(target=run_vision_worker, daemon=True).start()
+            return
+
         if is_system_info_query(text):
             result = get_system_info(parameters={}, player=self.ui)
             self.ui.write_log(result)
@@ -1041,6 +1065,44 @@ class NexusLive:
             print("[NEXUS AI] 🔄 Reconnecting in 3s...")
             await asyncio.sleep(3)
 
+def start_global_hotkey_thread(ui):
+    def hotkey_thread():
+        import ctypes
+        import ctypes.wintypes
+        
+        user32 = ctypes.windll.user32
+        byref = ctypes.byref
+        
+        HOTKEY_ID = 100
+        MOD_CONTROL_SHIFT = 0x0002 | 0x0004
+        VK_N = 0x4E
+        
+        # Unregister just in case
+        user32.UnregisterHotKey(None, HOTKEY_ID)
+        
+        if not user32.RegisterHotKey(None, HOTKEY_ID, MOD_CONTROL_SHIFT, VK_N):
+            print("[VisionEngine] Global hotkey Ctrl+Shift+N registration failed.")
+            return
+            
+        print("[VisionEngine] Global hotkey Ctrl+Shift+N registered successfully.")
+        try:
+            msg = ctypes.wintypes.MSG()
+            while user32.GetMessageW(byref(msg), None, 0, 0) != 0:
+                if msg.message == 0x0312:  # WM_HOTKEY
+                    if msg.wParam == HOTKEY_ID:
+                        print("[VisionEngine] Hotkey Ctrl+Shift+N pressed!")
+                        if ui.on_text_command:
+                            ui.on_text_command("Analyze my screen")
+                user32.TranslateMessage(byref(msg))
+                user32.DispatchMessageW(byref(msg))
+        except Exception as e:
+            print(f"[VisionEngine] Global hotkey error: {e}")
+        finally:
+            user32.UnregisterHotKey(None, HOTKEY_ID)
+            
+    threading.Thread(target=hotkey_thread, daemon=True).start()
+
+
 def main():
     import os
     import shutil
@@ -1087,6 +1149,7 @@ def main():
     print("Awaiting instructions.\n")
 
     ui = NexusAIUI("face.png")
+    start_global_hotkey_thread(ui)
 
     def runner():
         ui.wait_for_api_key()

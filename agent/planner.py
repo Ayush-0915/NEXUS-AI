@@ -139,6 +139,20 @@ diagnose_system
 
 analyze_storage
 
+analyze_screen
+  query: string (optional)
+
+extract_screen_text
+
+describe_current_window
+
+explain_error_on_screen
+
+detect_ui_elements
+
+vision_assistant
+  query: string (required)
+
 EXAMPLES:
 
 Goal: "research mechanical engineering and save it to a notepad file"
