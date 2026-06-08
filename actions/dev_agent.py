@@ -14,7 +14,8 @@ def get_base_dir():
 
 BASE_DIR         = get_base_dir()
 API_CONFIG_PATH  = BASE_DIR / "config" / "api_keys.json"
-PROJECTS_DIR     = Path.home() / "Desktop" / "NexusProjects"
+from core.file_manager import get_desktop_path
+PROJECTS_DIR     = get_desktop_path() / "NexusProjects"
 MAX_FIX_ATTEMPTS = 5
 MODEL_PLANNER    = "gemini-2.5-flash"
 MODEL_WRITER     = "gemini-2.5-flash"
@@ -458,6 +459,15 @@ def _build_project(
     proj_name    = project_name or plan.get("project_name", "nexus_project")
     proj_name    = re.sub(r"[^\w\-]", "_", proj_name)
     project_dir  = PROJECTS_DIR / proj_name
+    
+    # Boundary Enforcement
+    from actions.file_controller import validate_path_safety
+    is_safe, err = validate_path_safety(project_dir)
+    if not is_safe:
+        msg = f"Safety Violation: {err}"
+        if speak: speak(msg)
+        return msg
+        
     project_dir.mkdir(parents=True, exist_ok=True)
 
     files        = plan.get("files", [])

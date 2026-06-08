@@ -778,9 +778,17 @@ def file_processor(parameters: dict, player=None, speak=None) -> str:
     if not file_path_str:
         return "No file path provided."
 
-    path = Path(file_path_str)
+    from core.file_manager import resolve_save_path
+    path = resolve_save_path(file_path_str, default_to_desktop=True)
+    
+    # Boundary Enforcement
+    from actions.file_controller import validate_path_safety
+    is_safe, err = validate_path_safety(path)
+    if not is_safe:
+        return f"Safety Violation: {err}"
+        
     if not path.exists():
-        return f"File not found: {file_path_str}"
+        return f"File not found: {path}"
     if not path.is_file():
         return f"Path is not a file: {file_path_str}"
 

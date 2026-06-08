@@ -253,9 +253,9 @@ def _format_text_report(
 def _save_to_desktop(content: str, origin: str, destination: str) -> str:
     ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"flights_{origin}_{destination}_{ts}.txt".replace(" ", "_")
-    desktop  = Path.home() / "Desktop"
-    desktop.mkdir(parents=True, exist_ok=True)
-    filepath = desktop / filename
+    from core.file_manager import save_to_desktop
+    filepath = save_to_desktop(filename)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
 
     filepath.write_text(content, encoding="utf-8")
     print(f"[FlightFinder] 💾 Saved: {filepath}")

@@ -25,7 +25,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QTextEdit,
-    QVBoxLayout, QWidget, QProgressBar,
+    QVBoxLayout, QWidget, QProgressBar, QComboBox,
 )
 
 def _base_dir() -> Path:
@@ -1009,9 +1009,436 @@ class SetupOverlay(QWidget):
         self.done.emit(key, or_key, self._sel_os)
 
 
+class MetricCollectorThread(QObject):
+    metrics_ready = pyqtSignal(dict)
+
+    def __init__(self, interval=1.5):
+        super().__init__()
+        self.interval = interval
+        self._running = False
+        self._thread = None
+
+    def start(self):
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._running = False
+
+    def _run(self):
+        import socket
+        while self._running:
+            try:
+                cpu = psutil.cpu_percent(interval=None) if psutil else 0.0
+                ram_pct = 0.0
+                ram_used = 0.0
+                ram_total = 0.0
+                if psutil:
+                    mem = psutil.virtual_memory()
+                    ram_pct = mem.percent
+                    ram_used = mem.used / (1024**3)
+                    ram_total = mem.total / (1024**3)
+                    
+                from actions.system_info import get_cpu_temp, get_nvidia_details
+                cpu_temp = get_cpu_temp()
+                
+                gpu_usage = 0.0
+                gpu_temp = "N/A"
+                nvidia = get_nvidia_details()
+                if nvidia:
+                    gpu_temp = nvidia[2]
+                    try:
+                        cmd = "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits"
+                        res = subprocess.run(["powershell", "-Command", cmd], capture_output=True, text=True, timeout=2)
+                        if res.returncode == 0 and res.stdout.strip():
+                            gpu_usage = float(res.stdout.strip())
+                    except Exception:
+                        pass
+                
+                bat_pct = 0
+                bat_status = "N/A"
+                if psutil:
+                    bat = psutil.sensors_battery()
+                    if bat:
+                        bat_pct = bat.percent
+                        bat_status = "Charging" if bat.power_plugged else "Discharging"
+                        
+                net_status = "Disconnected"
+                try:
+                    socket.setdefaulttimeout(1)
+                    socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
+                    net_status = "Connected"
+                except Exception:
+                    pass
+                
+                data = {
+                    "cpu": cpu,
+                    "cpu_temp": cpu_temp,
+                    "ram_pct": ram_pct,
+                    "ram_used": ram_used,
+                    "ram_total": ram_total,
+                    "gpu": gpu_usage,
+                    "gpu_temp": gpu_temp,
+                    "battery_pct": bat_pct,
+                    "battery_status": bat_status,
+                    "network": net_status,
+                }
+                self.metrics_ready.emit(data)
+            except Exception as e:
+                print(f"[Monitor Worker] Error: {e}")
+            
+            for _ in range(max(1, int(self.interval * 10))):
+                if not self._running:
+                    break
+                time.sleep(0.1)
+
+
+class PerformanceMonitorWindow(QWidget):
+    def __init__(self, interval=1.5, parent=None):
+        super().__init__(None)  # Standalone floating window
+        self.setWindowTitle("NEXUS AI Performance Monitor")
+        self.resize(450, 500)
+        self.setMinimumSize(400, 450)
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: {C.BG};
+                color: {C.TEXT};
+                font-family: 'Courier New';
+            }}
+            QFrame {{
+                border: 1px solid {C.BORDER};
+                border-radius: 6px;
+                background-color: {C.PANEL};
+            }}
+            QLabel {{
+                border: none;
+                background: transparent;
+            }}
+            QPushButton {{
+                background-color: {C.PANEL2};
+                color: {C.PRI};
+                border: 1px solid {C.BORDER_A};
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {C.PRI_GHO};
+                border: 1px solid {C.PRI};
+            }}
+            QComboBox {{
+                background-color: {C.PANEL2};
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+                border-radius: 3px;
+                padding: 2px 6px;
+            }}
+        """)
+        
+        self.interval = interval
+        self.worker = MetricCollectorThread(self.interval)
+        self.worker.metrics_ready.connect(self._on_metrics_ready)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        
+        title_lbl = QLabel("◈ NEXUS AI PERFORMANCE MONITOR")
+        title_lbl.setFont(QFont("Courier New", 11, QFont.Weight.Bold))
+        title_lbl.setStyleSheet(f"color: {C.PRI};")
+        title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title_lbl)
+        
+        ctrl_row = QHBoxLayout()
+        self.start_btn = QPushButton("▶ START")
+        self.start_btn.clicked.connect(self.start_monitoring)
+        self.stop_btn = QPushButton("⏸ STOP")
+        self.stop_btn.clicked.connect(self.stop_monitoring)
+        
+        interval_lbl = QLabel("Refresh:")
+        interval_lbl.setFont(QFont("Courier New", 8))
+        self.interval_cb = QComboBox()
+        self.interval_cb.addItems(["1.0s", "1.5s", "2.0s", "3.0s"])
+        self.interval_cb.setCurrentText(f"{self.interval}s")
+        self.interval_cb.currentTextChanged.connect(self._on_interval_changed)
+        
+        ctrl_row.addWidget(self.start_btn)
+        ctrl_row.addWidget(self.stop_btn)
+        ctrl_row.addStretch()
+        ctrl_row.addWidget(interval_lbl)
+        ctrl_row.addWidget(self.interval_cb)
+        layout.addLayout(ctrl_row)
+        
+        panel = QFrame()
+        panel_lay = QVBoxLayout(panel)
+        panel_lay.setContentsMargins(12, 12, 12, 12)
+        panel_lay.setSpacing(14)
+        
+        cpu_box = QVBoxLayout()
+        cpu_lbl_row = QHBoxLayout()
+        cpu_title = QLabel("CPU UTILIZATION")
+        cpu_title.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        cpu_title.setStyleSheet(f"color: {C.TEXT_MED};")
+        self.cpu_val_lbl = QLabel("0.0%")
+        self.cpu_val_lbl.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        self.cpu_val_lbl.setStyleSheet(f"color: {C.PRI};")
+        cpu_lbl_row.addWidget(cpu_title)
+        cpu_lbl_row.addStretch()
+        cpu_lbl_row.addWidget(self.cpu_val_lbl)
+        cpu_box.addLayout(cpu_lbl_row)
+        
+        self.cpu_bar = QProgressBar()
+        self.cpu_bar.setFixedHeight(8)
+        self.cpu_bar.setRange(0, 100)
+        self.cpu_bar.setTextVisible(False)
+        self.cpu_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: {C.BAR_BG};
+                border: none;
+                border-radius: 4px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {C.PRI};
+                border-radius: 4px;
+            }}
+        """)
+        cpu_box.addWidget(self.cpu_bar)
+        
+        self.cpu_temp_lbl = QLabel("Temp: N/A")
+        self.cpu_temp_lbl.setFont(QFont("Courier New", 8))
+        self.cpu_temp_lbl.setStyleSheet(f"color: {C.TEXT_DIM};")
+        cpu_box.addWidget(self.cpu_temp_lbl)
+        panel_lay.addLayout(cpu_box)
+        
+        ram_box = QVBoxLayout()
+        ram_lbl_row = QHBoxLayout()
+        ram_title = QLabel("SYSTEM MEMORY (RAM)")
+        ram_title.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        ram_title.setStyleSheet(f"color: {C.TEXT_MED};")
+        self.ram_val_lbl = QLabel("0.0%")
+        self.ram_val_lbl.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        self.ram_val_lbl.setStyleSheet(f"color: {C.ACC2};")
+        ram_lbl_row.addWidget(ram_title)
+        ram_lbl_row.addStretch()
+        ram_lbl_row.addWidget(self.ram_val_lbl)
+        ram_box.addLayout(ram_lbl_row)
+        
+        self.ram_bar = QProgressBar()
+        self.ram_bar.setFixedHeight(8)
+        self.ram_bar.setRange(0, 100)
+        self.ram_bar.setTextVisible(False)
+        self.ram_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: {C.BAR_BG};
+                border: none;
+                border-radius: 4px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {C.ACC2};
+                border-radius: 4px;
+            }}
+        """)
+        ram_box.addWidget(self.ram_bar)
+        
+        self.ram_details_lbl = QLabel("Used: -- / Total: --")
+        self.ram_details_lbl.setFont(QFont("Courier New", 8))
+        self.ram_details_lbl.setStyleSheet(f"color: {C.TEXT_DIM};")
+        ram_box.addWidget(self.ram_details_lbl)
+        panel_lay.addLayout(ram_box)
+        
+        gpu_box = QVBoxLayout()
+        gpu_lbl_row = QHBoxLayout()
+        gpu_title = QLabel("GRADIENT GRAPHICS (GPU)")
+        gpu_title.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        gpu_title.setStyleSheet(f"color: {C.TEXT_MED};")
+        self.gpu_val_lbl = QLabel("N/A")
+        self.gpu_val_lbl.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        self.gpu_val_lbl.setStyleSheet(f"color: {C.ACC};")
+        gpu_lbl_row.addWidget(gpu_title)
+        gpu_lbl_row.addStretch()
+        gpu_lbl_row.addWidget(self.gpu_val_lbl)
+        gpu_box.addLayout(gpu_lbl_row)
+        
+        self.gpu_bar = QProgressBar()
+        self.gpu_bar.setFixedHeight(8)
+        self.gpu_bar.setRange(0, 100)
+        self.gpu_bar.setTextVisible(False)
+        self.gpu_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: {C.BAR_BG};
+                border: none;
+                border-radius: 4px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {C.ACC};
+                border-radius: 4px;
+            }}
+        """)
+        gpu_box.addWidget(self.gpu_bar)
+        
+        self.gpu_temp_lbl = QLabel("Temp: N/A")
+        self.gpu_temp_lbl.setFont(QFont("Courier New", 8))
+        self.gpu_temp_lbl.setStyleSheet(f"color: {C.TEXT_DIM};")
+        gpu_box.addWidget(self.gpu_temp_lbl)
+        panel_lay.addLayout(gpu_box)
+        
+        bat_box = QVBoxLayout()
+        bat_lbl_row = QHBoxLayout()
+        bat_title = QLabel("BATTERY CAPACITY")
+        bat_title.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        bat_title.setStyleSheet(f"color: {C.TEXT_MED};")
+        self.bat_val_lbl = QLabel("N/A")
+        self.bat_val_lbl.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        self.bat_val_lbl.setStyleSheet(f"color: {C.GREEN};")
+        bat_lbl_row.addWidget(bat_title)
+        bat_lbl_row.addStretch()
+        bat_lbl_row.addWidget(self.bat_val_lbl)
+        bat_box.addLayout(bat_lbl_row)
+        
+        self.bat_bar = QProgressBar()
+        self.bat_bar.setFixedHeight(8)
+        self.bat_bar.setRange(0, 100)
+        self.bat_bar.setTextVisible(False)
+        self.bat_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: {C.BAR_BG};
+                border: none;
+                border-radius: 4px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {C.GREEN};
+                border-radius: 4px;
+            }}
+        """)
+        bat_box.addWidget(self.bat_bar)
+        
+        self.bat_status_lbl = QLabel("Status: N/A")
+        self.bat_status_lbl.setFont(QFont("Courier New", 8))
+        self.bat_status_lbl.setStyleSheet(f"color: {C.TEXT_DIM};")
+        bat_box.addWidget(self.bat_status_lbl)
+        panel_lay.addLayout(bat_box)
+        
+        layout.addWidget(panel)
+        
+        extra_frame = QFrame()
+        extra_lay = QHBoxLayout(extra_frame)
+        extra_lay.setContentsMargins(8, 8, 8, 8)
+        
+        self.net_lbl = QLabel("NET: Checking...")
+        self.net_lbl.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        self.net_lbl.setStyleSheet(f"color: {C.TEXT_MED};")
+        
+        self.uptime_lbl = QLabel("UPTIME: --:--")
+        self.uptime_lbl.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        self.uptime_lbl.setStyleSheet(f"color: {C.TEXT_MED};")
+        
+        extra_lay.addWidget(self.net_lbl)
+        extra_lay.addStretch()
+        extra_lay.addWidget(self.uptime_lbl)
+        layout.addWidget(extra_frame)
+        
+        self.start_monitoring()
+
+    def start_monitoring(self):
+        self.worker.start()
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+
+    def stop_monitoring(self):
+        self.worker.stop()
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.cpu_val_lbl.setText("Paused")
+        self.cpu_val_lbl.setStyleSheet(f"color: {C.RED};")
+
+    def _on_interval_changed(self, text):
+        try:
+            val = float(text.replace("s", ""))
+            self.interval = val
+            self.worker.interval = val
+        except Exception:
+            pass
+
+    def _on_metrics_ready(self, data):
+        cpu = data["cpu"]
+        self.cpu_val_lbl.setText(f"{cpu:.1f}%")
+        self.cpu_val_lbl.setStyleSheet(f"color: {C.RED if cpu > 85 else (C.ACC if cpu > 65 else C.PRI)};")
+        self.cpu_bar.setValue(int(cpu))
+        self.cpu_bar.setStyleSheet(self._progress_bar_style(cpu, C.PRI))
+        self.cpu_temp_lbl.setText(f"Core Temp: {data['cpu_temp']}")
+        
+        ram_pct = data["ram_pct"]
+        self.ram_val_lbl.setText(f"{ram_pct:.1f}%")
+        self.ram_bar.setValue(int(ram_pct))
+        self.ram_bar.setStyleSheet(self._progress_bar_style(ram_pct, C.ACC2))
+        self.ram_details_lbl.setText(f"Used: {data['ram_used']:.1f} GB / Total: {data['ram_total']:.1f} GB")
+        
+        gpu = data["gpu"]
+        gpu_temp = data["gpu_temp"]
+        if gpu_temp != "N/A":
+            self.gpu_val_lbl.setText(f"{gpu:.1f}%")
+            self.gpu_bar.setValue(int(gpu))
+            self.gpu_bar.setStyleSheet(self._progress_bar_style(gpu, C.ACC))
+            self.gpu_temp_lbl.setText(f"Temp: {gpu_temp}")
+        else:
+            self.gpu_val_lbl.setText("N/A")
+            self.gpu_bar.setValue(0)
+            self.gpu_temp_lbl.setText("No NVIDIA GPU active")
+            
+        bat_pct = data["battery_pct"]
+        bat_status = data["battery_status"]
+        if bat_status != "N/A":
+            self.bat_val_lbl.setText(f"{bat_pct}%")
+            self.bat_bar.setValue(bat_pct)
+            self.bat_bar.setStyleSheet(self._progress_bar_style(bat_pct, C.GREEN, reverse_color=True))
+            self.bat_status_lbl.setText(f"Status: {bat_status}")
+        else:
+            self.bat_val_lbl.setText("N/A")
+            self.bat_bar.setValue(0)
+            self.bat_status_lbl.setText("Desktop (No Battery)")
+            
+        net = data["network"]
+        self.net_lbl.setText(f"NET: {net}")
+        self.net_lbl.setStyleSheet(f"color: {C.GREEN if net == 'Connected' else C.RED};")
+        
+        try:
+            boot_t = psutil.boot_time()
+            elapsed = time.time() - boot_t
+            h = int(elapsed // 3600)
+            m = int((elapsed % 3600) // 60)
+            self.uptime_lbl.setText(f"UPTIME: {h:02d}h {m:02d}m")
+        except Exception:
+            pass
+
+    def _progress_bar_style(self, val, color, reverse_color=False):
+        if reverse_color:
+            c = C.RED if val < 20 else (C.ACC if val < 40 else color)
+        else:
+            c = C.RED if val > 85 else (C.ACC if val > 65 else color)
+        return f"""
+            QProgressBar {{
+                background-color: {C.BAR_BG};
+                border: none;
+                border-radius: 4px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {c};
+                border-radius: 4px;
+            }}
+        """
+
+    def closeEvent(self, event):
+        self.worker.stop()
+        super().closeEvent(event)
+
+
 class MainWindow(QMainWindow):
     _log_sig   = pyqtSignal(str)
     _state_sig = pyqtSignal(str)
+    _show_perf_sig = pyqtSignal(bool)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -1068,6 +1495,7 @@ class MainWindow(QMainWindow):
 
         self._log_sig.connect(self._log.append_log)
         self._state_sig.connect(self._apply_state)
+        self._show_perf_sig.connect(self._handle_perf_monitor)
 
         self._overlay: SetupOverlay | None = None
         self._ready = self._check_config()
@@ -1084,6 +1512,21 @@ class MainWindow(QMainWindow):
             self.showNormal()
         else:
             self.showFullScreen()
+
+    def _handle_perf_monitor(self, open_window: bool):
+        if open_window:
+            if not hasattr(self, "_perf_win") or self._perf_win is None:
+                self._perf_win = PerformanceMonitorWindow()
+            self._perf_win.show()
+            self._perf_win.raise_()
+            self._perf_win.activateWindow()
+        else:
+            if hasattr(self, "_perf_win") and self._perf_win is not None:
+                try:
+                    self._perf_win.close()
+                except Exception:
+                    pass
+                self._perf_win = None
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1533,6 +1976,12 @@ class NexusAIUI:
     def stop_speaking(self):
         if not self.muted:
             self.set_state("LISTENING")
+
+    def show_performance_monitor(self):
+        self._win._show_perf_sig.emit(True)
+
+    def close_performance_monitor(self):
+        self._win._show_perf_sig.emit(False)
 
 
 # Compatibility alias

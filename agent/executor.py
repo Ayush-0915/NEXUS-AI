@@ -246,6 +246,30 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
         from actions.system_info import get_system_info
         return get_system_info(parameters=parameters, player=None) or "Done."
 
+    elif tool == "get_performance_metrics":
+        from actions.system_info import get_performance_metrics
+        return get_performance_metrics(parameters=parameters, player=None) or "Done."
+
+    elif tool == "check_system_health":
+        from actions.system_info import check_system_health
+        return check_system_health(parameters=parameters, player=None) or "Done."
+
+    elif tool == "get_running_apps":
+        from actions.system_info import get_running_apps
+        return get_running_apps(parameters=parameters, player=None) or "Done."
+
+    elif tool == "get_hardware_recommendations":
+        from actions.system_info import get_hardware_recommendations
+        return get_hardware_recommendations(parameters=parameters, player=None) or "Done."
+
+    elif tool == "diagnose_system":
+        from actions.system_info import diagnose_system
+        return diagnose_system(parameters=parameters, player=None) or "Done."
+
+    elif tool == "analyze_storage":
+        from actions.system_info import analyze_storage
+        return analyze_storage(parameters=parameters, player=None) or "Done."
+
     elif tool == "flight_finder":
         from actions.flight_finder import flight_finder
         return flight_finder(parameters=parameters, player=None, speak=speak) or "Done."

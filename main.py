@@ -31,7 +31,12 @@ from actions.dev_agent         import dev_agent
 from actions.web_search        import web_search as web_search_action
 from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
-from actions.system_info       import get_system_info, is_system_info_query
+from actions.system_info       import (
+    get_system_info, is_system_info_query,
+    is_performance_monitor_query, is_system_health_query,
+    is_app_detection_query, is_hardware_recommendation_query,
+    is_system_diagnostics_query, is_storage_analyzer_query
+)
 
 
 def get_base_dir():
@@ -237,18 +242,24 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "file_controller",
-        "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage.",
+        "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage, edit, validate, generate_project.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":      {"type": "STRING", "description": "list | create_file | create_folder | delete | move | copy | rename | read | write | find | largest | disk_usage | organize_desktop | info"},
+                "action":      {"type": "STRING", "description": "list | create_file | create_folder | delete | move | copy | rename | read | write | find | largest | disk_usage | organize_desktop | info | edit | validate | generate_project"},
                 "path":        {"type": "STRING", "description": "File/folder path or shortcut: desktop, downloads, documents, home"},
                 "destination": {"type": "STRING", "description": "Destination path for move/copy"},
                 "new_name":    {"type": "STRING", "description": "New name for rename"},
-                "content":     {"type": "STRING", "description": "Content for create_file/write"},
+                "content":     {"type": "STRING", "description": "Content for create_file/write/edit"},
                 "name":        {"type": "STRING", "description": "File name to search for"},
                 "extension":   {"type": "STRING", "description": "File extension to search (e.g. .pdf)"},
                 "count":       {"type": "INTEGER", "description": "Number of results for largest"},
+                "edit_type":   {"type": "STRING", "description": "append | replace | insert"},
+                "target":      {"type": "STRING", "description": "Target string to replace or insert relative to"},
+                "position":    {"type": "STRING", "description": "before | after | start | end"},
+                "validation_type": {"type": "STRING", "description": "exists | size | permissions"},
+                "project_description": {"type": "STRING", "description": "Prompt/instructions for generating custom project structure"},
+                "project_name": {"type": "STRING", "description": "Folder name of the project to generate"},
             },
             "required": ["action"]
         }
@@ -504,6 +515,62 @@ TOOL_DECLARATIONS = [
             "required": []
         }
     },
+    {
+        "name": "get_performance_metrics",
+        "description": "Inspects real-time telemetry including CPU usage, RAM usage, GPU usage, GPU temperature, CPU temperature, battery percentage, and network status.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "check_system_health",
+        "description": "Performs a local system health check returning overall score, CPU/RAM/Battery/Storage statuses, and recommendations.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "get_running_apps",
+        "description": "Lists the running user-facing applications and process groups, sorted by memory footprint, showing CPU %, RAM, and Window Titles.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "get_hardware_recommendations",
+        "description": "Analyzes RAM speed, motherboard slots, CPU gen, GPU model, and SSDs to return upgrade suggestions and AI/ML local execution suitability.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {"type": "STRING", "description": "Optional specific hardware question"}
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "diagnose_system",
+        "description": "Performs diagnostics on high resource usage, disk headroom, excessive startup apps, thermals, and battery wear, returning causes and actions ranked by confidence.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "analyze_storage",
+        "description": "Walks major user directories (Downloads, Documents, Desktop, Videos, Pictures) to report folder sizes, total disk percentages, and the largest files.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {},
+            "required": []
+        }
+    },
 ]
 
 
@@ -527,6 +594,55 @@ class NexusLive:
             result = get_system_info(parameters={}, player=self.ui)
             self.ui.write_log(result)
             self.speak("Here is your local system report.")
+            return
+
+        if is_performance_monitor_query(text):
+            t = text.lower()
+            if "close" in t or "stop" in t:
+                self.ui.close_performance_monitor()
+                self.ui.write_log("SYS: Closing performance monitor.")
+                self.speak("Closing performance monitor.")
+            else:
+                self.ui.show_performance_monitor()
+                from actions.system_info import get_performance_metrics
+                result = get_performance_metrics(parameters={}, player=self.ui)
+                self.ui.write_log(result)
+                self.speak("Opening performance monitor and showing live metrics.")
+            return
+
+        if is_system_health_query(text):
+            from actions.system_info import check_system_health
+            result = check_system_health(parameters={}, player=self.ui)
+            self.ui.write_log(result)
+            self.speak("Running a system health check. Here is the report.")
+            return
+
+        if is_app_detection_query(text):
+            from actions.system_info import get_running_apps
+            result = get_running_apps(parameters={}, player=self.ui)
+            self.ui.write_log(result)
+            self.speak("Gathering active programs. Here is the list.")
+            return
+
+        if is_hardware_recommendation_query(text):
+            from actions.system_info import get_hardware_recommendations
+            result = get_hardware_recommendations(parameters={"query": text}, player=self.ui)
+            self.ui.write_log(result)
+            self.speak("Analyzing hardware configuration and AI suitability.")
+            return
+
+        if is_system_diagnostics_query(text):
+            from actions.system_info import diagnose_system
+            result = diagnose_system(parameters={}, player=self.ui)
+            self.ui.write_log(result)
+            self.speak("Running diagnostics. Here is the performance analysis.")
+            return
+
+        if is_storage_analyzer_query(text):
+            from actions.system_info import analyze_storage
+            result = analyze_storage(parameters={}, player=self.ui)
+            self.ui.write_log(result)
+            self.speak("Scanning user folders for storage utilization.")
             return
 
         asyncio.run_coroutine_threadsafe(
@@ -705,6 +821,37 @@ class NexusLive:
             elif name == "get_system_info":
                 r = await loop.run_in_executor(None, lambda: get_system_info(parameters=args, player=self.ui))
                 result = r or "System specifications gathered."
+
+            elif name == "get_performance_metrics":
+                self.ui.show_performance_monitor()
+                from actions.system_info import get_performance_metrics
+                r = await loop.run_in_executor(None, lambda: get_performance_metrics(parameters=args, player=self.ui))
+                result = r or "Performance metrics gathered."
+
+            elif name == "check_system_health":
+                from actions.system_info import check_system_health
+                r = await loop.run_in_executor(None, lambda: check_system_health(parameters=args, player=self.ui))
+                result = r or "Health report generated."
+
+            elif name == "get_running_apps":
+                from actions.system_info import get_running_apps
+                r = await loop.run_in_executor(None, lambda: get_running_apps(parameters=args, player=self.ui))
+                result = r or "Running apps gathered."
+
+            elif name == "get_hardware_recommendations":
+                from actions.system_info import get_hardware_recommendations
+                r = await loop.run_in_executor(None, lambda: get_hardware_recommendations(parameters=args, player=self.ui))
+                result = r or "Hardware recommendations generated."
+
+            elif name == "diagnose_system":
+                from actions.system_info import diagnose_system
+                r = await loop.run_in_executor(None, lambda: diagnose_system(parameters=args, player=self.ui))
+                result = r or "System diagnostics completed."
+
+            elif name == "analyze_storage":
+                from actions.system_info import analyze_storage
+                r = await loop.run_in_executor(None, lambda: analyze_storage(parameters=args, player=self.ui))
+                result = r or "Storage analysis completed."
 
             elif name == "flight_finder":
                 r = await loop.run_in_executor(None, lambda: flight_finder(parameters=args, player=self.ui))

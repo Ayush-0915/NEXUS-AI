@@ -51,10 +51,17 @@ browser_control
   direction: "up" | "down" (for scroll)
 
 file_controller
-  action: "write" | "create_file" | "read" | "list" | "delete" | "move" | "copy" | "find" | "disk_usage" (required)
+  action: "write" | "create_file" | "create_folder" | "read" | "list" | "delete" | "move" | "copy" | "find" | "disk_usage" | "edit" | "validate" | "generate_project" | "where_is_file" (required)
   path: string — use "desktop" for Desktop folder
-  name: string — filename
-  content: string — file content (for write/create_file)
+  name: string — filename/folder name (use 'name' for where_is_file search target)
+  content: string — file content (for write/create_file/edit)
+  edit_type: "append" | "replace" | "insert" (for edit)
+  target: string — text to search for (for edit)
+  position: "before" | "after" | "start" | "end" (for edit)
+  validation_type: "exists" | "size" | "permissions" (for validate)
+  project_description: string — custom project description (for generate_project)
+  project_name: string — project folder name (for generate_project)
+
 
 cmd_control
   task: string (required) — natural language description of what to do
@@ -118,6 +125,20 @@ dev_agent
 
 get_system_info
   component: string (optional) — "cpu" | "ram" | "gpu" | "storage" | "os" | "battery" | "network" | "device" | "all"
+
+get_performance_metrics
+
+check_system_health
+
+get_running_apps
+
+get_hardware_recommendations
+  query: string (optional)
+
+diagnose_system
+
+analyze_storage
+
 EXAMPLES:
 
 Goal: "research mechanical engineering and save it to a notepad file"

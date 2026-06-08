@@ -173,9 +173,9 @@ def _summarize_with_gemini(transcript: str, video_url: str) -> str:
 def _save_summary(content: str, video_url: str) -> str:
     ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"youtube_summary_{ts}.txt"
-    desktop  = Path.home() / "Desktop"
-    desktop.mkdir(parents=True, exist_ok=True)
-    filepath = desktop / filename
+    from core.file_manager import save_to_desktop
+    filepath = save_to_desktop(filename)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
 
     header = (
         f"NEXUS AI — YouTube Summary\n"
