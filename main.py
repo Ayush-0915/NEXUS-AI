@@ -5,6 +5,18 @@ import sys
 import traceback
 from pathlib import Path
 
+# Reconfigure stdout/stderr to UTF-8 to prevent UnicodeEncodeError with emojis
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 import sounddevice as sd
 from google import genai
 from google.genai import types
@@ -584,6 +596,7 @@ class NexusLive:
         self._loop          = None
         self._is_speaking   = False
         self._speaking_lock = threading.Lock()
+        self.speaking_start_time = None
         self.ui.on_text_command = self._on_text_command
 
     def _on_text_command(self, text: str):
@@ -693,12 +706,34 @@ class NexusLive:
         )
 
     def set_speaking(self, value: bool):
+        from datetime import datetime
+        import time
         with self._speaking_lock:
-            self._is_speaking = value
-        if value:
-            self.ui.set_state("SPEAKING")
-        elif not self.ui.muted:
-            self.ui.set_state("LISTENING")
+            prev = self._is_speaking
+            if prev != value:
+                self._is_speaking = value
+                
+                prev_state = "SPEAKING" if prev else "LISTENING"
+                curr_state = "SPEAKING" if value else "LISTENING"
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                
+                print(
+                    f"\n[VOICE]\n"
+                    f"Previous State: {prev_state}\n"
+                    f"Current State: {curr_state}\n"
+                    f"Timestamp: {now_str}\n"
+                )
+                
+                if value:
+                    self.speaking_start_time = time.time()
+                    print("\n[VOICE]\nTTS Started: True\n")
+                    self.ui.set_state("SPEAKING")
+                else:
+                    self.speaking_start_time = None
+                    print("\n[VOICE]\nTTS Finished: True\n")
+                    print("\n[AUDIO]\nReturned to LISTENING\n")
+                    if not self.ui.muted:
+                        self.ui.set_state("LISTENING")
 
     def speak(self, text: str):
         if not self._loop or not self.session:
@@ -966,6 +1001,7 @@ class NexusLive:
                 async for response in self.session.receive():
 
                     if response.data:
+                        print(f"\n[AUDIO]\nChunk received: {len(response.data)}\n")
                         self.audio_in_queue.put_nowait(response.data)
 
                     if response.server_content:
@@ -980,14 +1016,19 @@ class NexusLive:
                         if sc.input_transcription and sc.input_transcription.text:
                             txt = sc.input_transcription.text.strip()
                             if txt:
+                                if not in_buf:
+                                    print("\n[VOICE]\nSTT Started: True\n")
                                 in_buf.append(txt)
 
                         if sc.turn_complete:
-                            self.set_speaking(False)
+                            print("\n[AUDIO]\nTurn complete received\n")
+                            self.audio_in_queue.put_nowait(None)
+                            print("\n[AUDIO]\nSentinel queued\n")
 
                             full_in = " ".join(in_buf).strip()
                             if full_in:
                                 self.ui.write_log(f"You: {full_in}")
+                                print("\n[VOICE]\nSTT Finished: True\n")
                             in_buf = []
 
                             full_out = " ".join(out_buf).strip()
@@ -1028,9 +1069,21 @@ class NexusLive:
             blocksize=CHUNK_SIZE,
         )
         stream.start()
+        is_playing = False
         try:
             while True:
                 chunk = await self.audio_in_queue.get()
+                if chunk is None:
+                    self.set_speaking(False)
+                    if is_playing:
+                        print("\n[AUDIO]\nPlayback finished\n")
+                        is_playing = False
+                    continue
+
+                if not is_playing:
+                    print("\n[AUDIO]\nPlayback started\n")
+                    is_playing = True
+
                 self.set_speaking(True)
                 await asyncio.to_thread(stream.write, chunk)
         except Exception as e:
@@ -1038,8 +1091,25 @@ class NexusLive:
             raise
         finally:
             self.set_speaking(False)
+            if is_playing:
+                print("\n[AUDIO]\nPlayback finished\n")
             stream.stop()
             stream.close()
+
+    async def _failsafe_monitor(self):
+        import time
+        while True:
+            await asyncio.sleep(0.5)
+            if self._is_speaking and self.speaking_start_time:
+                if time.time() - self.speaking_start_time > 10.0:
+                    print("\n[VOICE] ⚠️ SPEAKING state exceeded 10 seconds failsafe. Resetting pipeline.\n")
+                    if self.audio_in_queue:
+                        while not self.audio_in_queue.empty():
+                            try:
+                                self.audio_in_queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                break
+                    self.set_speaking(False)
 
     async def run(self):
         client = genai.Client(
@@ -1070,6 +1140,7 @@ class NexusLive:
                     tg.create_task(self._listen_audio())
                     tg.create_task(self._receive_audio())
                     tg.create_task(self._play_audio())
+                    tg.create_task(self._failsafe_monitor())
                     
             except Exception as e:
                 print(f"[NEXUS AI] ⚠️ {e}")
