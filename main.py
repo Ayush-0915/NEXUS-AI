@@ -583,6 +583,84 @@ TOOL_DECLARATIONS = [
             "required": []
         }
     },
+    {
+        "name": "scan_project",
+        "description": "Scans folder structure, configurations, and file lists of a project recursively.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "path": {"type": "STRING", "description": "Project root folder path"}
+            },
+            "required": ["path"]
+        }
+    },
+    {
+        "name": "analyze_architecture",
+        "description": "Generates high-level architecture component layout and entry points of a codebase.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "path": {"type": "STRING", "description": "Project root folder path"}
+            },
+            "required": ["path"]
+        }
+    },
+    {
+        "name": "detect_tech_stack",
+        "description": "Identifies programming languages, frameworks, libraries, and database tools used in a codebase.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "path": {"type": "STRING", "description": "Project root folder path"}
+            },
+            "required": ["path"]
+        }
+    },
+    {
+        "name": "find_code_smells",
+        "description": "Analyzes a project's files for code smells, large structures, nesting, and risks.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "path": {"type": "STRING", "description": "Project root folder path"}
+            },
+            "required": ["path"]
+        }
+    },
+    {
+        "name": "generate_project_report",
+        "description": "Creates a structured NEXUS AI Project Report detailing stack, stats, risks, and suggestions.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "path": {"type": "STRING", "description": "Project root folder path"}
+            },
+            "required": ["path"]
+        }
+    },
+    {
+        "name": "generate_readme",
+        "description": "Automatically generates a professional README.md file inside the project directory.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "path": {"type": "STRING", "description": "Project root folder path"}
+            },
+            "required": ["path"]
+        }
+    },
+    {
+        "name": "answer_project_question",
+        "description": "Answers a codebase-specific developer question using local context.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "path": {"type": "STRING", "description": "Project root folder path"},
+                "question": {"type": "STRING", "description": "The developer question to answer"}
+            },
+            "required": ["path", "question"]
+        }
+    },
 ]
 
 
@@ -640,6 +718,134 @@ class NexusLive:
                         self.ui.set_state("LISTENING")
                 
             threading.Thread(target=run_vision_worker, daemon=True).start()
+            return
+
+        # Project Intelligence Intercept cases
+        proj_keywords = [
+            "analyze this project", "analyze repository", "analyze this repository", "generate readme", "generate a readme",
+            "explain this codebase", "explain the codebase", "find bugs in this project", "find bugs in the project",
+            "what technologies are used?", "what tech stack is used", "how is this project structured?", "how is the project structured?",
+            "analyze yourself", "compare nexus"
+        ]
+        is_proj = any(kw in t_lower for kw in proj_keywords)
+        if is_proj:
+            def run_project_worker():
+                try:
+                    self.ui.set_state("PROCESSING")
+                    
+                    # Resolve path
+                    path = None
+                    if "careernova" in t_lower:
+                        path = r"c:\Users\ayush\OneDrive\Desktop\Private\Careernova"
+                    elif "creditwise" in t_lower:
+                        path = r"C:\Users\ayush\Downloads\Telegram Desktop\DAY 27 CreditWise Loan System(Minor-Project)\DAY 27 CreditWise Loan System(Minor-Project)\Day 27 CreditWise Loan System(Minor-Project) TEAMWORK"
+                    elif "nexus" in t_lower:
+                        path = str(BASE_DIR)
+                    else:
+                        if self.ui.current_file:
+                            p = Path(self.ui.current_file)
+                            path = str(p.parent if p.is_file() else p)
+                        else:
+                            path = str(BASE_DIR)
+
+                    from actions.project_intelligence import (
+                        scan_project, detect_tech_stack, find_code_smells,
+                        analyze_architecture, generate_project_report,
+                        generate_readme, answer_project_question,
+                        analyze_self, compare_projects
+                    )
+                    
+                    # Check Self-Analysis
+                    if "analyze yourself" in t_lower:
+                        self.ui.write_log("SYS: Running Self-Analysis Mode...")
+                        res = analyze_self()
+                        self.ui.show_project_intelligence()
+                        self.ui.update_project_intelligence(res)
+                        msg = "Self-analysis complete. capability and architecture reports loaded."
+                        self.ui.write_log(f"NEXUS: {msg}")
+                        self.speak(msg)
+                        return
+                        
+                    # Check Comparative
+                    if "compare" in t_lower and ("careernova" in t_lower or "nexus" in t_lower):
+                        self.ui.write_log("SYS: Running Project Comparison Mode...")
+                        path_a = str(BASE_DIR)
+                        path_b = r"c:\Users\ayush\OneDrive\Desktop\Private\Careernova"
+                        res = compare_projects(path_a, path_b)
+                        self.ui.show_project_intelligence()
+                        self.ui.update_project_intelligence({
+                            "project_name": "Project Comparison",
+                            "project_path": f"{res['project_a']} vs {res['project_b']}",
+                            "total_files": 0,
+                            "total_dirs": 0,
+                            "language_distribution": {},
+                            "report": res["report"]
+                        })
+                        msg = f"Comparison between {res['project_a']} and {res['project_b']} is loaded in the intelligence window."
+                        self.ui.write_log(f"NEXUS: {msg}")
+                        self.speak(msg)
+                        return
+
+                    # Default Project Analysis Actions
+                    scan = scan_project(path)
+                    if "error" in scan:
+                        self.ui.write_log(f"SYS: {scan['error']}")
+                        self.speak(scan["error"])
+                        return
+                        
+                    self.ui.show_project_intelligence()
+                    self.ui.update_project_intelligence(scan)
+                    
+                    if "generate readme" in t_lower:
+                        self.ui.write_log("SYS: Generating README...")
+                        res = generate_readme(path)
+                        self.ui.write_log(f"NEXUS: {res}")
+                        self.speak("README generated successfully.")
+                    elif "find bugs" in t_lower or "code smells" in t_lower:
+                        self.ui.write_log("SYS: Scanning for code smells...")
+                        smells = find_code_smells(path)
+                        report = generate_project_report(path)
+                        scan["report"] = report
+                        self.ui.update_project_intelligence(scan)
+                        msg = f"Code smell scan found {len(smells)} potential improvements. Details are displayed."
+                        self.ui.write_log(f"NEXUS: {msg}")
+                        self.speak(msg)
+                    elif "tech stack" in t_lower or "technologies" in t_lower:
+                        self.ui.write_log("SYS: Detecting technology stack...")
+                        tech = detect_tech_stack(path)
+                        scan["report"] = f"Languages: {', '.join(tech['languages'])}\nFrameworks: {', '.join(tech['frameworks'])}\nDatabases: {', '.join(tech['databases'])}"
+                        self.ui.update_project_intelligence(scan)
+                        msg = f"Detected stack: {', '.join(tech['frameworks'] or tech['languages'])}."
+                        self.ui.write_log(f"NEXUS: {msg}")
+                        self.speak(msg)
+                    elif "structure" in t_lower or "architecture" in t_lower or "explain" in t_lower:
+                        self.ui.write_log("SYS: Analyzing codebase architecture...")
+                        arch = analyze_architecture(path)
+                        scan["report"] = arch
+                        self.ui.update_project_intelligence(scan)
+                        msg = "Codebase architecture analyzed. component map is displayed."
+                        self.ui.write_log(f"NEXUS: {msg}")
+                        self.speak(msg)
+                    else:
+                        self.ui.write_log("SYS: Running codebase audit...")
+                        report = generate_project_report(path)
+                        scan["report"] = report
+                        self.ui.update_project_intelligence(scan)
+                        msg = f"Analysis of project {scan['project_name']} is complete."
+                        self.ui.write_log(f"NEXUS: {msg}")
+                        self.speak(msg)
+                        
+                except Exception as e:
+                    print(f"[ProjectIntelligence] Worker thread failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    self.ui.write_log(f"SYS: Project intelligence run failed: {e}")
+                    self.speak("I encountered an error during project analysis.")
+                finally:
+                    if not self.ui.muted:
+                        self.ui.set_state("LISTENING")
+
+            threading.Thread(target=run_project_worker, daemon=True).start()
             return
 
         if is_system_info_query(text):
@@ -926,6 +1132,70 @@ class NexusLive:
                 from actions.system_info import analyze_storage
                 r = await loop.run_in_executor(None, lambda: analyze_storage(parameters=args, player=self.ui))
                 result = r or "Storage analysis completed."
+
+            elif name == "scan_project":
+                from actions.project_intelligence import scan_project
+                path = args.get("path", ".")
+                r = await loop.run_in_executor(None, lambda: scan_project(path))
+                if not r.get("error"):
+                    self.ui.show_project_intelligence()
+                    self.ui.update_project_intelligence(r)
+                    result = f"Scanned project: {r.get('project_name')}"
+                else:
+                    result = r.get("error")
+
+            elif name == "analyze_architecture":
+                from actions.project_intelligence import analyze_architecture, scan_project
+                path = args.get("path", ".")
+                r_scan = await loop.run_in_executor(None, lambda: scan_project(path))
+                r = await loop.run_in_executor(None, lambda: analyze_architecture(path))
+                if not r_scan.get("error"):
+                    r_scan["report"] = r
+                    self.ui.show_project_intelligence()
+                    self.ui.update_project_intelligence(r_scan)
+                result = r
+
+            elif name == "detect_tech_stack":
+                from actions.project_intelligence import detect_tech_stack
+                path = args.get("path", ".")
+                r = await loop.run_in_executor(None, lambda: detect_tech_stack(path))
+                result = f"Tech stack detected: {r}"
+
+            elif name == "find_code_smells":
+                from actions.project_intelligence import find_code_smells, scan_project, generate_project_report
+                path = args.get("path", ".")
+                r_scan = await loop.run_in_executor(None, lambda: scan_project(path))
+                r_smells = await loop.run_in_executor(None, lambda: find_code_smells(path))
+                r_report = await loop.run_in_executor(None, lambda: generate_project_report(path))
+                if not r_scan.get("error"):
+                    r_scan["report"] = r_report
+                    self.ui.show_project_intelligence()
+                    self.ui.update_project_intelligence(r_scan)
+                result = f"Found {len(r_smells)} code smells."
+
+            elif name == "generate_project_report":
+                from actions.project_intelligence import generate_project_report, scan_project
+                path = args.get("path", ".")
+                r_scan = await loop.run_in_executor(None, lambda: scan_project(path))
+                r = await loop.run_in_executor(None, lambda: generate_project_report(path))
+                if not r_scan.get("error"):
+                    r_scan["report"] = r
+                    self.ui.show_project_intelligence()
+                    self.ui.update_project_intelligence(r_scan)
+                result = r
+
+            elif name == "generate_readme":
+                from actions.project_intelligence import generate_readme
+                path = args.get("path", ".")
+                r = await loop.run_in_executor(None, lambda: generate_readme(path))
+                result = r
+
+            elif name == "answer_project_question":
+                from actions.project_intelligence import answer_project_question
+                path = args.get("path", ".")
+                question = args.get("question", "")
+                r = await loop.run_in_executor(None, lambda: answer_project_question(path, question))
+                result = r
 
             elif name == "flight_finder":
                 r = await loop.run_in_executor(None, lambda: flight_finder(parameters=args, player=self.ui))

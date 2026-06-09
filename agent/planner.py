@@ -123,6 +123,28 @@ dev_agent
   description: string (required)
   language: string (optional)
 
+scan_project
+  path: string (required)
+
+analyze_architecture
+  path: string (required)
+
+detect_tech_stack
+  path: string (required)
+
+find_code_smells
+  path: string (required)
+
+generate_project_report
+  path: string (required)
+
+generate_readme
+  path: string (required)
+
+answer_project_question
+  path: string (required)
+  question: string (required)
+
 get_system_info
   component: string (optional) — "cpu" | "ram" | "gpu" | "storage" | "os" | "battery" | "network" | "device" | "all"
 

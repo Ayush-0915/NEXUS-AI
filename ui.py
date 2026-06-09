@@ -1638,6 +1638,219 @@ class VisionIntelligenceWindow(QWidget):
         self._sig_ask_consent.emit()
         self._consent_event.wait()
         return self._consent_granted
+class ProjectIntelligenceWindow(QWidget):
+    _sig_update = pyqtSignal(dict)
+
+    def __init__(self, parent=None):
+        super().__init__(None)  # Standalone floating window
+        self.setWindowTitle("NEXUS AI Project Intelligence")
+        self.resize(680, 720)
+        self.setMinimumSize(550, 600)
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: {C.BG};
+                color: {C.TEXT};
+                font-family: 'Courier New';
+            }}
+            QFrame {{
+                border: 1px solid {C.BORDER};
+                border-radius: 6px;
+                background-color: {C.PANEL};
+            }}
+            QLabel {{
+                border: none;
+                background: transparent;
+            }}
+            QTextEdit {{
+                background-color: #000d14;
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+                border-radius: 4px;
+                padding: 6px;
+            }}
+            QLineEdit {{
+                background-color: #000d14;
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+                border-radius: 4px;
+                padding: 6px;
+            }}
+            QPushButton {{
+                background-color: {C.PANEL2};
+                color: {C.PRI};
+                border: 1px solid {C.BORDER_A};
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {C.PRI_GHO};
+                border: 1px solid {C.PRI};
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        # Title
+        title_lbl = QLabel("◈ NEXUS AI PROJECT INTELLIGENCE")
+        title_lbl.setFont(QFont("Courier New", 12, QFont.Weight.Bold))
+        title_lbl.setStyleSheet(f"color: {C.PRI};")
+        title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title_lbl)
+
+        # Overview Frame
+        info_frame = QFrame()
+        info_lay = QGridLayout(info_frame)
+        info_lay.setContentsMargins(12, 10, 12, 10)
+        info_lay.setSpacing(8)
+
+        def _h_lbl(t):
+            l = QLabel(t)
+            l.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+            l.setStyleSheet(f"color: {C.TEXT_DIM};")
+            return l
+
+        def _v_lbl(t):
+            l = QLabel(t)
+            l.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+            l.setStyleSheet(f"color: {C.WHITE};")
+            l.setWordWrap(True)
+            return l
+
+        info_lay.addWidget(_h_lbl("Project:"), 0, 0)
+        self.proj_name_lbl = _v_lbl("N/A")
+        info_lay.addWidget(self.proj_name_lbl, 0, 1)
+
+        info_lay.addWidget(_h_lbl("Path:"), 0, 2)
+        self.proj_path_lbl = _v_lbl("N/A")
+        info_lay.addWidget(self.proj_path_lbl, 0, 3)
+
+        info_lay.addWidget(_h_lbl("Files / Dirs:"), 1, 0)
+        self.proj_stats_lbl = _v_lbl("0 / 0")
+        info_lay.addWidget(self.proj_stats_lbl, 1, 1)
+
+        info_lay.addWidget(_h_lbl("Complexity / Risk:"), 1, 2)
+        self.proj_risk_lbl = _v_lbl("LOW")
+        info_lay.addWidget(self.proj_risk_lbl, 1, 3)
+
+        layout.addWidget(info_frame)
+
+        # Tech Stack & Language Dist
+        tech_frame = QFrame()
+        tech_lay = QVBoxLayout(tech_frame)
+        tech_lay.setContentsMargins(10, 8, 10, 8)
+        
+        tech_title = QLabel("TECHNOLOGY STACK & LANGUAGES:")
+        tech_title.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        tech_title.setStyleSheet(f"color: {C.ACC2};")
+        tech_lay.addWidget(tech_title)
+        
+        self.tech_lbl = QLabel("Tech Stack: N/A")
+        self.tech_lbl.setFont(QFont("Courier New", 9))
+        self.tech_lbl.setWordWrap(True)
+        tech_lay.addWidget(self.tech_lbl)
+        
+        self.lang_dist_lbl = QLabel("Languages: N/A")
+        self.lang_dist_lbl.setFont(QFont("Courier New", 9))
+        self.lang_dist_lbl.setWordWrap(True)
+        tech_lay.addWidget(self.lang_dist_lbl)
+        
+        layout.addWidget(tech_frame)
+
+        # Architecture & Report Area
+        layout.addWidget(QLabel("PROJECT REPORT & ARCHITECTURE:"))
+        self.report_edit = QTextEdit()
+        self.report_edit.setReadOnly(True)
+        self.report_edit.setFont(QFont("Courier New", 9))
+        layout.addWidget(self.report_edit, stretch=4)
+
+        # Interactive Q&A Area
+        qa_title = QLabel("ASK CODEBASE QUESTION:")
+        qa_title.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        qa_title.setStyleSheet(f"color: {C.ACC2};")
+        layout.addWidget(qa_title)
+
+        qa_layout = QHBoxLayout()
+        self.qa_input = QLineEdit()
+        self.qa_input.setPlaceholderText("Ask e.g. Where is auth handled? How to deploy?")
+        self.qa_input.returnPressed.connect(self._ask_question)
+        self.qa_btn = QPushButton("Submit")
+        self.qa_btn.clicked.connect(self._ask_question)
+        qa_layout.addWidget(self.qa_input)
+        qa_layout.addWidget(self.qa_btn)
+        layout.addLayout(qa_layout)
+
+        # Trigger Signals
+        self._sig_update.connect(self._on_update)
+
+        # Stored path for Q&A
+        self._current_path = ""
+
+    def _on_update(self, data: dict):
+        self.proj_name_lbl.setText(data.get("project_name", "N/A"))
+        path_str = data.get("project_path", "N/A")
+        self._current_path = path_str
+        self.proj_path_lbl.setText(path_str)
+        
+        file_count = data.get("total_files", 0)
+        dir_count = data.get("total_dirs", 0)
+        self.proj_stats_lbl.setText(f"{file_count} files / {dir_count} dirs")
+        
+        # Display Language Distribution
+        lang_dist = data.get("language_distribution", {})
+        lang_strs = [f"{k}: {v}%" for k, v in lang_dist.items()]
+        self.lang_dist_lbl.setText("Languages: " + (", ".join(lang_strs) if lang_strs else "None"))
+
+        # Display Tech Stack Heuristics
+        from actions.project_intelligence import detect_tech_stack
+        tech = detect_tech_stack(path_str)
+        if "error" not in tech:
+            tech_str = f"Langs: {', '.join(tech['languages']) or 'None'} | Frameworks: {', '.join(tech['frameworks']) or 'None'} | DB: {', '.join(tech['databases']) or 'None'} | Deploy: {', '.join(tech['hosting_targets']) or 'None'}"
+            self.tech_lbl.setText(tech_str)
+        else:
+            self.tech_lbl.setText("Tech Stack: Programmatic scan pending.")
+
+        # Show code smells risk
+        from actions.project_intelligence import find_code_smells
+        smells = find_code_smells(path_str)
+        high_count = sum(1 for s in smells if s["severity"] == "HIGH")
+        med_count = sum(1 for s in smells if s["severity"] == "MEDIUM")
+        self.proj_risk_lbl.setText(f"HIGH: {high_count} / MED: {med_count}")
+        if high_count > 0:
+            self.proj_risk_lbl.setStyleSheet(f"color: {C.RED};")
+        else:
+            self.proj_risk_lbl.setStyleSheet(f"color: {C.GREEN};")
+
+        # Report / Architecture Text Box
+        report_content = data.get("report", "")
+        if not report_content:
+            from actions.project_intelligence import generate_project_report
+            report_content = generate_project_report(path_str)
+        self.report_edit.setText(report_content)
+
+    def _ask_question(self):
+        question = self.qa_input.text().strip()
+        if not question or not self._current_path:
+            return
+        
+        self.qa_btn.setEnabled(False)
+        self.qa_input.setReadOnly(True)
+        self.report_edit.append(f"\n\n>>> QUESTION: {question}\nThinking...")
+        
+        def run_qa():
+            from actions.project_intelligence import answer_project_question
+            ans = answer_project_question(self._current_path, question)
+            QTimer.singleShot(0, lambda: self._show_answer(ans))
+            
+        threading.Thread(target=run_qa, daemon=True).start()
+
+    def _show_answer(self, answer: str):
+        self.report_edit.append(f"\n>>> ANSWER:\n{answer}\n")
+        self.qa_btn.setEnabled(True)
+        self.qa_input.setReadOnly(False)
+        self.qa_input.clear()
 
 
 class MainWindow(QMainWindow):
@@ -1645,6 +1858,7 @@ class MainWindow(QMainWindow):
     _state_sig = pyqtSignal(str)
     _show_perf_sig = pyqtSignal(bool)
     _show_vision_sig = pyqtSignal(bool)
+    _show_proj_intel_sig = pyqtSignal(bool)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -1703,6 +1917,7 @@ class MainWindow(QMainWindow):
         self._state_sig.connect(self._apply_state)
         self._show_perf_sig.connect(self._handle_perf_monitor)
         self._show_vision_sig.connect(self._handle_vision_panel)
+        self._show_proj_intel_sig.connect(self._handle_proj_intel_panel)
 
         self._overlay: SetupOverlay | None = None
         self._ready = self._check_config()
@@ -1751,6 +1966,21 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 self._vision_win = None
+
+    def _handle_proj_intel_panel(self, open_window: bool):
+        if open_window:
+            if not hasattr(self, "_proj_intel_win") or self._proj_intel_win is None:
+                self._proj_intel_win = ProjectIntelligenceWindow()
+            self._proj_intel_win.show()
+            self._proj_intel_win.raise_()
+            self._proj_intel_win.activateWindow()
+        else:
+            if hasattr(self, "_proj_intel_win") and self._proj_intel_win is not None:
+                try:
+                    self._proj_intel_win.close()
+                except Exception:
+                    pass
+                self._proj_intel_win = None
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -2216,6 +2446,16 @@ class NexusAIUI:
     def update_vision_panel(self, data: dict):
         if hasattr(self._win, "_vision_win") and self._win._vision_win is not None:
             self._win._vision_win._sig_update.emit(data)
+
+    def show_project_intelligence(self):
+        self._win._show_proj_intel_sig.emit(True)
+
+    def close_project_intelligence(self):
+        self._win._show_proj_intel_sig.emit(False)
+
+    def update_project_intelligence(self, data: dict):
+        if hasattr(self._win, "_proj_intel_win") and self._win._proj_intel_win is not None:
+            self._win._proj_intel_win._sig_update.emit(data)
 
 
 # Compatibility alias

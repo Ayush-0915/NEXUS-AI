@@ -20,6 +20,8 @@ def get_base_dir() -> Path:
 
 BASE_DIR        = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+player          = None # Global fallback to prevent NameError inside background executor
+
 
 
 def _get_api_key() -> str:
@@ -331,6 +333,34 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
             from actions.vision_engine import analyze_screen
             player.update_vision_panel(analyze_screen())
         return res
+
+    elif tool == "scan_project":
+        from actions.project_intelligence import scan_project
+        return json.dumps(scan_project(parameters.get("path", ".")))
+
+    elif tool == "analyze_architecture":
+        from actions.project_intelligence import analyze_architecture
+        return analyze_architecture(parameters.get("path", "."))
+
+    elif tool == "detect_tech_stack":
+        from actions.project_intelligence import detect_tech_stack
+        return json.dumps(detect_tech_stack(parameters.get("path", ".")))
+
+    elif tool == "find_code_smells":
+        from actions.project_intelligence import find_code_smells
+        return json.dumps(find_code_smells(parameters.get("path", ".")))
+
+    elif tool == "generate_project_report":
+        from actions.project_intelligence import generate_project_report
+        return generate_project_report(parameters.get("path", "."))
+
+    elif tool == "generate_readme":
+        from actions.project_intelligence import generate_readme
+        return generate_readme(parameters.get("path", "."))
+
+    elif tool == "answer_project_question":
+        from actions.project_intelligence import answer_project_question
+        return answer_project_question(parameters.get("path", "."), parameters.get("question", ""))
 
     else:
         print(f"[Executor] ⚠️ Unknown tool '{tool}' — falling back to generated_code")
