@@ -601,15 +601,30 @@ class NexusLive:
         is_vision = any(kw in t_lower for kw in vision_keywords)
         if is_vision:
             def run_vision_worker():
-                self.ui.set_state("PROCESSING")
-                self.ui.show_vision_panel()
-                
-                from actions.vision_engine import vision_assistant, analyze_screen
-                result = vision_assistant(text)
-                
-                self.ui.write_log(f"NEXUS: {result}")
-                self.ui.update_vision_panel(analyze_screen())
-                self.speak(result)
+                try:
+                    self.ui.set_state("PROCESSING")
+                    self.ui.show_vision_panel()
+                    
+                    from actions.vision_engine import vision_assistant, analyze_screen
+                    result = vision_assistant(text)
+                    
+                    self.ui.write_log(f"NEXUS: {result}")
+                    try:
+                        self.ui.update_vision_panel(analyze_screen())
+                    except Exception as ve_err:
+                        print(f"[VisionEngine] Panel update failed: {ve_err}")
+                        import traceback
+                        traceback.print_exc()
+                    self.speak(result)
+                except Exception as e:
+                    print(f"[VisionEngine] Worker thread failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    self.ui.write_log(f"SYS: Vision analysis failed: {e}")
+                    self.speak(f"Vision analysis encountered an error: {str(e)[:100]}")
+                finally:
+                    if not self.ui.muted:
+                        self.ui.set_state("LISTENING")
                 
             threading.Thread(target=run_vision_worker, daemon=True).start()
             return
