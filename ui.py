@@ -39,7 +39,7 @@ API_FILE   = CONFIG_DIR / "api_keys.json"
 
 _DEFAULT_W, _DEFAULT_H = 980, 700
 _MIN_W,     _MIN_H     = 820, 580
-_LEFT_W  = 148
+_LEFT_W  = 250
 _RIGHT_W = 340
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
@@ -1638,6 +1638,718 @@ class VisionIntelligenceWindow(QWidget):
         self._sig_ask_consent.emit()
         self._consent_event.wait()
         return self._consent_granted
+
+UI_CONFIG_FILE = BASE_DIR / "config" / "nexus_ui_config.json"
+
+def save_layout_config(collapsed: bool, visible: bool, expanded: bool = False):
+    try:
+        UI_CONFIG_FILE.parent.mkdir(exist_ok=True)
+        with open(UI_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump({"collapsed": collapsed, "visible": visible, "expanded": expanded}, f)
+    except Exception as e:
+        print(f"[UI Config] Failed to save: {e}")
+
+def load_layout_config() -> dict:
+    if UI_CONFIG_FILE.exists():
+        try:
+            with open(UI_CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"collapsed": False, "visible": True, "expanded": False}
+
+
+class VisionPreviewWidget(QWidget):
+    """Embedded cyberpunk preview widget inside the main window left sidebar."""
+    def __init__(self, main_window=None, parent=None):
+        super().__init__(parent)
+        self.main_window = main_window
+        self.status = "Idle"
+        self.collapsed = False
+        self.expanded = False
+        self.last_rendered_frame_id = -1
+        
+        # Cyberpunk visual effects setup: dark glass background and neon cyan border
+        self.setStyleSheet(f"""
+            VisionPreviewWidget {{
+                background-color: rgba(1, 15, 24, 0.85);
+                color: {C.TEXT};
+                font-family: 'Courier New';
+                border: 1px solid {C.PRI};
+                border-radius: 4px;
+            }}
+            QLabel {{
+                border: none;
+                background: transparent;
+            }}
+            QPushButton {{
+                background-color: {C.DARK};
+                color: {C.TEXT_MED};
+                border: 1px solid {C.BORDER};
+                border-radius: 2px;
+                font-size: 8px;
+                font-weight: bold;
+                padding: 1px 3px;
+            }}
+            QPushButton:hover {{
+                color: {C.PRI};
+                border: 1px solid {C.BORDER_B};
+                background-color: {C.PRI_GHO};
+            }}
+        """)
+        
+        # Hardware-accelerated neon glow effect
+        from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+        self.glow_effect = QGraphicsDropShadowEffect(self)
+        self.glow_effect.setOffset(0, 0)
+        self.glow_effect.setColor(QColor(C.PRI))
+        self.glow_effect.setBlurRadius(12)
+        self.setGraphicsEffect(self.glow_effect)
+        self.glow_effect.setEnabled(False)
+        self.glow_angle = 0
+        
+        # Main layout - packed tightly to fit in total height
+        v_lay = QVBoxLayout(self)
+        v_lay.setContentsMargins(4, 4, 4, 4)
+        v_lay.setSpacing(2)
+        
+        # Header Row: "◈ NEXUS VISION" | Collapse Button
+        hdr_lay = QHBoxLayout()
+        hdr_lay.setContentsMargins(2, 0, 2, 0)
+        hdr_lay.setSpacing(2)
+        
+        lbl_title = QLabel("◈ NEXUS VISION")
+        lbl_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        lbl_title.setStyleSheet(f"color: {C.WHITE};")
+        hdr_lay.addWidget(lbl_title)
+        
+        hdr_lay.addStretch()
+        
+        self.btn_collapse = QPushButton("▲")
+        self.btn_collapse.setFixedSize(14, 14)
+        self.btn_collapse.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_collapse.clicked.connect(self.toggle_collapse)
+        hdr_lay.addWidget(self.btn_collapse)
+        
+        v_lay.addLayout(hdr_lay)
+        
+        # Status indicators: Cap, Ana, Idle
+        self.status_widget = QWidget()
+        self.status_widget.setStyleSheet("border: none; background: transparent;")
+        self.status_widget.setFixedHeight(10)
+        stat_lay = QHBoxLayout(self.status_widget)
+        stat_lay.setContentsMargins(2, 0, 2, 0)
+        stat_lay.setSpacing(4)
+        
+        self.lbl_capturing = QLabel("● Cap")
+        self.lbl_capturing.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self.lbl_capturing.setStyleSheet(f"color: {C.TEXT_DIM};")
+        
+        self.lbl_analyzing = QLabel("● Ana")
+        self.lbl_analyzing.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self.lbl_analyzing.setStyleSheet(f"color: {C.TEXT_DIM};")
+        
+        self.lbl_idle = QLabel("● Idle")
+        self.lbl_idle.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self.lbl_idle.setStyleSheet(f"color: {C.TEXT_DIM};")
+        
+        stat_lay.addWidget(self.lbl_capturing)
+        stat_lay.addWidget(self.lbl_analyzing)
+        stat_lay.addWidget(self.lbl_idle)
+        v_lay.addWidget(self.status_widget)
+        
+        # Live Preview Image box (occupies 80% height in normal/expanded modes)
+        self.preview_lbl = QLabel("Awaiting frame...")
+        self.preview_lbl.setFont(QFont("Courier New", 7))
+        self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_lbl.setMinimumSize(226, 256)
+        self.preview_lbl.setFixedHeight(256)
+        self.preview_lbl.setStyleSheet(f"background-color: #000d14; border: 1px solid {C.BORDER}; border-radius: 2px;")
+        v_lay.addWidget(self.preview_lbl, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        # Compact Controls Toolbar: Pause, Resume, Expand, Config
+        self.btn_widget = QWidget()
+        self.btn_widget.setStyleSheet("border: none; background: transparent;")
+        self.btn_widget.setFixedHeight(16)
+        btn_lay = QHBoxLayout(self.btn_widget)
+        btn_lay.setContentsMargins(0, 0, 0, 0)
+        btn_lay.setSpacing(3)
+        
+        self.btn_pause = QPushButton("Pause")
+        self.btn_pause.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_pause.clicked.connect(self._pause_capture)
+        btn_lay.addWidget(self.btn_pause)
+        
+        self.btn_resume = QPushButton("Resume")
+        self.btn_resume.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_resume.clicked.connect(self._resume_capture)
+        btn_lay.addWidget(self.btn_resume)
+        
+        self.btn_expand = QPushButton("Expand")
+        self.btn_expand.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_expand.clicked.connect(self.toggle_expand)
+        btn_lay.addWidget(self.btn_expand)
+        
+        self.btn_settings = QPushButton("Config")
+        self.btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_settings.clicked.connect(self._open_settings)
+        btn_lay.addWidget(self.btn_settings)
+        
+        v_lay.addWidget(self.btn_widget)
+        
+        # Footer Diagnostics Panel: 3 rows of detailed telemetry
+        self.metric_widget = QWidget()
+        self.metric_widget.setStyleSheet("border: none; background: transparent;")
+        self.metric_widget.setFixedHeight(32)
+        metric_lay = QVBoxLayout(self.metric_widget)
+        metric_lay.setContentsMargins(2, 0, 2, 0)
+        metric_lay.setSpacing(1)
+        
+        self.lbl_row1 = QLabel("FPS: P:0.0 C:0.0 | CHG:0")
+        self.lbl_row1.setFont(QFont("Courier New", 7))
+        self.lbl_row1.setStyleSheet(f"color: {C.TEXT_MED};")
+        metric_lay.addWidget(self.lbl_row1)
+        
+        self.lbl_row2 = QLabel("LAT: R:0ms O:0ms")
+        self.lbl_row2.setFont(QFont("Courier New", 7))
+        self.lbl_row2.setStyleSheet(f"color: {C.TEXT_MED};")
+        metric_lay.addWidget(self.lbl_row2)
+        
+        self.lbl_row3 = QLabel("RES: 1920x1080 | DRP:0")
+        self.lbl_row3.setFont(QFont("Courier New", 7))
+        self.lbl_row3.setStyleSheet(f"color: {C.TEXT_MED};")
+        metric_lay.addWidget(self.lbl_row3)
+        
+        v_lay.addWidget(self.metric_widget)
+        
+        # Set default geometry properties
+        self.setFixedHeight(320)
+        self.update_sidebar_size()
+        
+        # Timers Setup - UI Refresh Timer runs at 12.5 FPS (80ms)
+        self.update_timer = QTimer(self)
+        self.update_timer.timeout.connect(self.refresh_preview)
+        self.update_timer.start(80)
+        
+        self.glow_timer = QTimer(self)
+        self.glow_timer.timeout.connect(self.animate_glow)
+        self.glow_timer.start(80)
+        
+    def update_sidebar_size(self):
+        from actions.vision_engine import set_target_sidebar_size
+        w = max(1, self.preview_lbl.width())
+        h = max(1, self.preview_lbl.height())
+        set_target_sidebar_size(w, h)
+        
+    def toggle_expand(self):
+        if self.collapsed:
+            return
+        self.expanded = not self.expanded
+        if self.expanded:
+            self.btn_expand.setText("Shrink")
+            self.setFixedHeight(480)
+            self.preview_lbl.setFixedHeight(384)
+            self.preview_lbl.setMinimumSize(336, 384)
+            if self.main_window and hasattr(self.main_window, "_left_panel"):
+                self.main_window._left_panel.setFixedWidth(360)
+        else:
+            self.btn_expand.setText("Expand")
+            self.setFixedHeight(320)
+            self.preview_lbl.setFixedHeight(256)
+            self.preview_lbl.setMinimumSize(226, 256)
+            if self.main_window and hasattr(self.main_window, "_left_panel"):
+                self.main_window._left_panel.setFixedWidth(250)
+            
+        self.update_sidebar_size()
+        save_layout_config(self.collapsed, self.isVisible(), self.expanded)
+        
+    def toggle_collapse(self):
+        self.collapsed = not self.collapsed
+        if self.collapsed:
+            self.btn_collapse.setText("▼")
+            self.preview_lbl.hide()
+            self.status_widget.hide()
+            self.btn_widget.hide()
+            self.metric_widget.hide()
+            self.setFixedHeight(30)
+        else:
+            self.btn_collapse.setText("▲")
+            self.preview_lbl.show()
+            self.status_widget.show()
+            self.btn_widget.show()
+            self.metric_widget.show()
+            if self.expanded:
+                self.setFixedHeight(480)
+                self.preview_lbl.setFixedHeight(384)
+                self.preview_lbl.setMinimumSize(336, 384)
+                if self.main_window and hasattr(self.main_window, "_left_panel"):
+                    self.main_window._left_panel.setFixedWidth(360)
+            else:
+                self.setFixedHeight(320)
+                self.preview_lbl.setFixedHeight(256)
+                self.preview_lbl.setMinimumSize(226, 256)
+                if self.main_window and hasattr(self.main_window, "_left_panel"):
+                    self.main_window._left_panel.setFixedWidth(250)
+                
+        self.update_sidebar_size()
+        save_layout_config(self.collapsed, self.isVisible(), self.expanded)
+        
+    def _pause_capture(self):
+        from actions.vision_engine import pause_vision_mode
+        pause_vision_mode()
+        self.refresh_preview()
+        
+    def _resume_capture(self):
+        from actions.vision_engine import resume_vision_mode
+        resume_vision_mode()
+        self.refresh_preview()
+        
+    def _open_settings(self):
+        if self.main_window:
+            self.main_window._handle_vision_panel(True)
+            
+    def animate_glow(self):
+        if self.status in ("Capturing", "Analyzing"):
+            import math
+            self.glow_angle = (self.glow_angle + 8) % 360
+            pulse = (math.sin(math.radians(self.glow_angle)) + 1) / 2.0
+            blur = int(8 + pulse * 12)
+            glow_col = C.GREEN if self.status == "Capturing" else C.PRI
+            self.glow_effect.setEnabled(True)
+            self.glow_effect.setBlurRadius(blur)
+            self.glow_effect.setColor(QColor(glow_col))
+        else:
+            self.glow_effect.setEnabled(False)
+            
+    def refresh_preview(self):
+        import time
+        from actions.vision_engine import get_diagnostics, get_vision_service, _vision_lock
+        from actions.vision_engine import _frame_id, _display_frame_sidebar
+        import actions.vision_engine as ve
+        
+        # 1. Calculate rendering FPS in real time
+        t_now = time.perf_counter()
+        if hasattr(self, '_last_render_time'):
+            dt = t_now - self._last_render_time
+            preview_fps = 1.0 / dt if dt > 0 else 0.0
+        else:
+            preview_fps = 0.0
+        self._last_render_time = t_now
+        ve._render_fps = preview_fps
+        
+        diag = get_diagnostics()
+        service = get_vision_service()
+        
+        # 2. Capture Status
+        if service.is_paused():
+            self.status = "Idle"
+        elif diag.get("ocr_latency_ms", 0.0) > 0.0 or diag.get("change_detection_ms", 0.0) > 0.0:
+            self.status = "Analyzing"
+        elif service._running:
+            self.status = "Capturing"
+        else:
+            self.status = "Idle"
+            
+        self.lbl_capturing.setStyleSheet(f"color: {C.GREEN if self.status == 'Capturing' else C.TEXT_DIM};")
+        self.lbl_analyzing.setStyleSheet(f"color: {C.PRI if self.status == 'Analyzing' else C.TEXT_DIM};")
+        self.lbl_idle.setStyleSheet(f"color: {C.RED if self.status == 'Idle' else C.TEXT_DIM};")
+        
+        # 3. Telemetry row updates
+        render_fps = diag.get("render_fps", 0.0)
+        capture_fps = diag.get("capture_fps", 0.0)
+        chg_val = diag.get("changes_detected", 0)
+        render_lat = diag.get("render_latency_ms", 0.0)
+        ocr_lat = diag.get("ocr_latency_ms", 0.0)
+        res_val = diag.get("resolution", "1920x1080")
+        drops = diag.get("frame_drops", 0)
+        
+        self.lbl_row1.setText(f"FPS: P:{render_fps:.1f} C:{capture_fps:.1f} | CHG:{chg_val}")
+        self.lbl_row2.setText(f"LAT: R:{render_lat:.0f}ms O:{ocr_lat:.0f}ms")
+        self.lbl_row3.setText(f"RES: {res_val} | DRP:{drops}")
+        
+        # 4. Double Buffered Rendering from background QImage
+        if not self.collapsed:
+            if hasattr(self, 'last_rendered_frame_id') and _frame_id == self.last_rendered_frame_id:
+                return  # Skip redundant redraw if frame hasn't changed
+            self.last_rendered_frame_id = _frame_id
+            
+            with _vision_lock:
+                qimg = _display_frame_sidebar
+                ve._frame_read = True
+                
+            if qimg is not None and not qimg.isNull():
+                try:
+                    pix = QPixmap.fromImage(qimg)
+                    self.preview_lbl.setPixmap(pix)
+                except Exception:
+                    self.preview_lbl.setText("Frame error")
+            else:
+                self.preview_lbl.setText("Awaiting frame...")
+        
+
+
+class VisionCenterPage(QWidget):
+    """The central dashboard view for NEXUS Vision Mode."""
+    def __init__(self, main_window, parent=None):
+        super().__init__(parent)
+        self.main_window = main_window
+        
+        # Cyberpunk style setup matching main dashboard design language
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: {C.BG};
+                color: {C.TEXT};
+                font-family: 'Courier New';
+            }}
+            QFrame {{
+                border: 1px solid {C.BORDER};
+                border-radius: 6px;
+                background-color: rgba(1, 15, 24, 0.85);
+            }}
+            QLabel {{
+                border: none;
+                background: transparent;
+            }}
+            QPushButton {{
+                background-color: {C.PANEL2};
+                color: {C.PRI};
+                border: 1px solid {C.BORDER_A};
+                border-radius: 4px;
+                padding: 5px 10px;
+                font-size: 9px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {C.PRI_GHO};
+                border: 1px solid {C.PRI};
+                color: {C.WHITE};
+            }}
+            QPushButton:disabled {{
+                color: {C.TEXT_DIM};
+                border: 1px solid {C.BORDER};
+                background-color: #000d14;
+            }}
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
+        
+        # 1. Header Container
+        hdr_frame = QFrame()
+        hdr_frame.setFixedHeight(34)
+        hdr_lay = QHBoxLayout(hdr_frame)
+        hdr_lay.setContentsMargins(10, 0, 10, 0)
+        
+        self.title_lbl = QLabel("◈ NEXUS VISION ACTIVE")
+        self.title_lbl.setFont(QFont("Courier New", 11, QFont.Weight.Bold))
+        self.title_lbl.setStyleSheet(f"color: {C.PRI};")
+        
+        self.status_dot = QLabel("● ACTIVE")
+        self.status_dot.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        self.status_dot.setStyleSheet(f"color: {C.GREEN};")
+        
+        self.active_mon_lbl = QLabel("Monitor: 1")
+        self.active_mon_lbl.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        self.active_mon_lbl.setStyleSheet(f"color: {C.ACC2};")
+        
+        hdr_lay.addWidget(self.title_lbl)
+        hdr_lay.addStretch()
+        hdr_lay.addWidget(self.status_dot)
+        hdr_lay.addSpacing(15)
+        hdr_lay.addWidget(self.active_mon_lbl)
+        
+        layout.addWidget(hdr_frame)
+        
+        # 2. Large Screen Viewer (Consumes ~75-85% of available space)
+        preview_frame = QFrame()
+        prev_lay = QVBoxLayout(preview_frame)
+        prev_lay.setContentsMargins(4, 4, 4, 4)
+        
+        self.lbl_preview_img = QLabel("Awaiting screenshot feed...")
+        self.lbl_preview_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_preview_img.setStyleSheet("background-color: #00090f; border-radius: 4px;")
+        prev_lay.addWidget(self.lbl_preview_img)
+        
+        layout.addWidget(preview_frame, stretch=8)
+        
+        # 3. Dashboard Footer Layout
+        footer_frame = QFrame()
+        footer_frame.setFixedHeight(95)
+        footer_lay = QHBoxLayout(footer_frame)
+        footer_lay.setContentsMargins(8, 6, 8, 6)
+        footer_lay.setSpacing(10)
+        
+        # Footer Section A: Live Telemetry & Diagnostics
+        diag_box = QFrame()
+        diag_box.setStyleSheet(f"border: 1px solid {C.BORDER_A}; background-color: #000d14;")
+        diag_lay = QGridLayout(diag_box)
+        diag_lay.setContentsMargins(8, 4, 8, 4)
+        diag_lay.setSpacing(2)
+        
+        self.lbl_diag_title = QLabel("DIAGNOSTICS")
+        self.lbl_diag_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self.lbl_diag_title.setStyleSheet(f"color: {C.PRI};")
+        diag_lay.addWidget(self.lbl_diag_title, 0, 0, 1, 2)
+        
+        self.lbl_diag_fps = QLabel("FPS: P:0.0 / C:0.0")
+        self.lbl_diag_fps.setFont(QFont("Courier New", 7))
+        self.lbl_diag_fps.setStyleSheet(f"color: {C.TEXT_MED};")
+        diag_lay.addWidget(self.lbl_diag_fps, 1, 0)
+        
+        self.lbl_diag_lat = QLabel("LAT: R:0ms / O:0ms")
+        self.lbl_diag_lat.setFont(QFont("Courier New", 7))
+        self.lbl_diag_lat.setStyleSheet(f"color: {C.TEXT_MED};")
+        diag_lay.addWidget(self.lbl_diag_lat, 1, 1)
+        
+        self.lbl_diag_res = QLabel("RES: 1920x1080")
+        self.lbl_diag_res.setFont(QFont("Courier New", 7))
+        self.lbl_diag_res.setStyleSheet(f"color: {C.TEXT_MED};")
+        diag_lay.addWidget(self.lbl_diag_res, 2, 0)
+        
+        self.lbl_diag_drops = QLabel("DROPS: 0 | CHG: 0")
+        self.lbl_diag_drops.setFont(QFont("Courier New", 7))
+        self.lbl_diag_drops.setStyleSheet(f"color: {C.TEXT_MED};")
+        diag_lay.addWidget(self.lbl_diag_drops, 2, 1)
+        
+        footer_lay.addWidget(diag_box, stretch=2)
+        
+        # Footer Section B: Developer Workspace Monitor
+        self.dev_box = QFrame()
+        self.dev_box.setStyleSheet(f"border: 1px solid {C.BORDER_A}; background-color: #000d14;")
+        dev_lay = QVBoxLayout(self.dev_box)
+        dev_lay.setContentsMargins(8, 4, 8, 4)
+        dev_lay.setSpacing(1)
+        
+        self.lbl_dev_title = QLabel("◈ DEVELOPER MONITORING")
+        self.lbl_dev_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self.lbl_dev_title.setStyleSheet(f"color: {C.GREEN};")
+        dev_lay.addWidget(self.lbl_dev_title)
+        
+        self.lbl_dev_file = QLabel("File   : None")
+        self.lbl_dev_file.setFont(QFont("Courier New", 7))
+        self.lbl_dev_file.setStyleSheet(f"color: {C.TEXT_MED};")
+        dev_lay.addWidget(self.lbl_dev_file)
+        
+        self.lbl_dev_lang = QLabel("Lang   : Unknown")
+        self.lbl_dev_lang.setFont(QFont("Courier New", 7))
+        self.lbl_dev_lang.setStyleSheet(f"color: {C.TEXT_MED};")
+        dev_lay.addWidget(self.lbl_dev_lang)
+        
+        self.lbl_dev_workspace = QLabel("Workspace: None")
+        self.lbl_dev_workspace.setFont(QFont("Courier New", 7))
+        self.lbl_dev_workspace.setStyleSheet(f"color: {C.TEXT_MED};")
+        dev_lay.addWidget(self.lbl_dev_workspace)
+        
+        self.lbl_dev_issues = QLabel("Issues : 0 Errors / 0 Warnings")
+        self.lbl_dev_issues.setFont(QFont("Courier New", 7))
+        self.lbl_dev_issues.setStyleSheet(f"color: {C.TEXT_MED};")
+        dev_lay.addWidget(self.lbl_dev_issues)
+        
+        footer_lay.addWidget(self.dev_box, stretch=3)
+        
+        # Footer Section C: Controls & Monitor Selector
+        ctrl_box = QFrame()
+        ctrl_box.setStyleSheet("border: none; background: transparent;")
+        ctrl_lay = QVBoxLayout(ctrl_box)
+        ctrl_lay.setContentsMargins(0, 0, 0, 0)
+        ctrl_lay.setSpacing(4)
+        
+        # Monitor selectors
+        mon_selector_lay = QHBoxLayout()
+        mon_selector_lay.setSpacing(4)
+        
+        lbl_mon_sel = QLabel("MONITOR:")
+        lbl_mon_sel.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        lbl_mon_sel.setStyleSheet(f"color: {C.TEXT_MED};")
+        mon_selector_lay.addWidget(lbl_mon_sel)
+        
+        self.btn_mon1 = QPushButton("M1")
+        self.btn_mon1.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_mon1.clicked.connect(lambda: self._select_monitor(1))
+        mon_selector_lay.addWidget(self.btn_mon1)
+        
+        self.btn_mon2 = QPushButton("M2")
+        self.btn_mon2.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_mon2.clicked.connect(lambda: self._select_monitor(2))
+        mon_selector_lay.addWidget(self.btn_mon2)
+        
+        self.btn_mon_all = QPushButton("ALL")
+        self.btn_mon_all.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_mon_all.clicked.connect(lambda: self._select_monitor(0))
+        mon_selector_lay.addWidget(self.btn_mon_all)
+        
+        ctrl_lay.addLayout(mon_selector_lay)
+        
+        # Action control buttons
+        action_btn_lay = QHBoxLayout()
+        action_btn_lay.setSpacing(4)
+        
+        self.btn_pause = QPushButton("⏸ PAUSE")
+        self.btn_pause.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_pause.clicked.connect(self._pause_vision)
+        action_btn_lay.addWidget(self.btn_pause)
+        
+        self.btn_resume = QPushButton("▶ RESUME")
+        self.btn_resume.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_resume.clicked.connect(self._resume_vision)
+        action_btn_lay.addWidget(self.btn_resume)
+        
+        self.btn_expand = QPushButton("◈ EXPAND")
+        self.btn_expand.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_expand.clicked.connect(self._toggle_expand)
+        action_btn_lay.addWidget(self.btn_expand)
+        
+        ctrl_lay.addLayout(action_btn_lay)
+        
+        footer_lay.addWidget(ctrl_box, stretch=2)
+        
+        layout.addWidget(footer_frame)
+        
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.timeout.connect(self.refresh_ui)
+        self.refresh_timer.start(80)
+        
+        self._update_monitor_buttons_style()
+        
+    def showEvent(self, event):
+        super().showEvent(event)
+        from actions.vision_engine import set_center_visible
+        set_center_visible(True)
+        
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        from actions.vision_engine import set_center_visible
+        set_center_visible(False)
+        
+    def _select_monitor(self, idx: int):
+        from actions.vision_engine import set_selected_monitor
+        set_selected_monitor(idx)
+        self._update_monitor_buttons_style()
+        
+    def _update_monitor_buttons_style(self):
+        from actions.vision_engine import get_selected_monitor, get_monitors_count
+        curr = get_selected_monitor()
+        num_monitors = get_monitors_count()
+        
+        self.btn_mon1.setStyleSheet(f"""
+            background-color: {C.PRI_GHO if curr == 1 else C.PANEL2};
+            color: {C.WHITE if curr == 1 else C.PRI};
+            border: 1px solid {C.PRI if curr == 1 else C.BORDER_A};
+        """)
+        
+        has_mon2 = num_monitors >= 2
+        self.btn_mon2.setEnabled(has_mon2)
+        self.btn_mon2.setStyleSheet(f"""
+            background-color: {C.PRI_GHO if curr == 2 else C.PANEL2};
+            color: {C.WHITE if (curr == 2 and has_mon2) else (C.PRI if has_mon2 else C.TEXT_DIM)};
+            border: 1px solid {C.PRI if (curr == 2 and has_mon2) else C.BORDER_A};
+        """)
+        
+        self.btn_mon_all.setStyleSheet(f"""
+            background-color: {C.PRI_GHO if curr == 0 else C.PANEL2};
+            color: {C.WHITE if curr == 0 else C.PRI};
+            border: 1px solid {C.PRI if curr == 0 else C.BORDER_A};
+        """)
+        
+    def _pause_vision(self):
+        from actions.vision_engine import pause_vision_mode
+        pause_vision_mode()
+        
+    def _resume_vision(self):
+        from actions.vision_engine import resume_vision_mode
+        resume_vision_mode()
+        
+    def _toggle_expand(self):
+        if hasattr(self.main_window, "vision_preview_widget") and self.main_window.vision_preview_widget is not None:
+            self.main_window.vision_preview_widget.toggle_expand()
+            
+    def refresh_ui(self):
+        from actions.vision_engine import (
+            _vision_lock, _display_frame_center, set_target_center_size,
+            get_diagnostics, get_vision_context, get_selected_monitor, get_vision_service
+        )
+        
+        set_target_center_size(self.lbl_preview_img.width(), self.lbl_preview_img.height())
+        
+        # 1. Update Preview Image
+        with _vision_lock:
+            qimg = _display_frame_center
+        if qimg is not None and not qimg.isNull():
+            try:
+                pix = QPixmap.fromImage(qimg)
+                self.lbl_preview_img.setPixmap(pix)
+            except Exception:
+                pass
+        else:
+            self.lbl_preview_img.setText("Awaiting screenshot feed...")
+            
+        # 2. Update Diagnostics & Active Monitor Label
+        diag = get_diagnostics()
+        ctx = get_vision_context()
+        curr_mon = get_selected_monitor()
+        mon_str = "All Monitors" if curr_mon == 0 else f"Monitor {curr_mon}"
+        self.active_mon_lbl.setText(f"Active Monitor: {mon_str}")
+        
+        service = get_vision_service()
+        if service.is_paused():
+            self.status_dot.setText("● PAUSED")
+            self.status_dot.setStyleSheet(f"color: {C.RED};")
+        else:
+            self.status_dot.setText("● ACTIVE")
+            self.status_dot.setStyleSheet(f"color: {C.GREEN};")
+            
+        render_fps = diag.get("render_fps", 0.0)
+        capture_fps = diag.get("capture_fps", 0.0)
+        render_lat = diag.get("render_latency_ms", 0.0)
+        ocr_lat = diag.get("ocr_latency_ms", 0.0)
+        res_val = diag.get("resolution", "1920x1080")
+        drops = diag.get("frame_drops", 0)
+        chg_val = diag.get("changes_detected", 0)
+        
+        self.lbl_diag_fps.setText(f"FPS: P:{render_fps:.1f} / C:{capture_fps:.1f}")
+        self.lbl_diag_lat.setText(f"LAT: R:{render_lat:.0f}ms / O:{ocr_lat:.0f}ms")
+        self.lbl_diag_res.setText(f"RES: {res_val}")
+        self.lbl_diag_drops.setText(f"DROPS: {drops} | CHG: {chg_val}")
+        
+        # 3. Update Developer Workspace Monitor
+        app = ctx.get("current_application", "").lower()
+        is_vscode_active = ("code" in app or "visual studio code" in app or ctx.get("current_task") == "Coding")
+        
+        if is_vscode_active:
+            self.dev_box.setStyleSheet(f"border: 1px solid {C.GREEN}; background-color: #000d14;")
+            self.lbl_dev_title.setStyleSheet(f"color: {C.GREEN};")
+            self.lbl_dev_file.setText(f"File   : {ctx.get('current_file', 'None')}")
+            
+            lang_str = "Unknown"
+            workspace_str = "Unknown"
+            issues_str = "0 Errors / 0 Warnings"
+            
+            p_context = ctx.get("project_context", "")
+            if p_context:
+                try:
+                    dev_dict = eval(p_context)
+                    if isinstance(dev_dict, dict):
+                        lang_str = dev_dict.get("language", "Unknown")
+                        workspace_str = dev_dict.get("workspace", "Unknown")
+                        
+                        errors_cnt = dev_dict.get("errors_count", len(dev_dict.get("errors", [])))
+                        warnings_cnt = dev_dict.get("warnings_count", len(dev_dict.get("warnings", [])))
+                        issues_str = f"{errors_cnt} Errors / {warnings_cnt} Warnings"
+                except Exception:
+                    pass
+                    
+            self.lbl_dev_lang.setText(f"Lang   : {lang_str}")
+            self.lbl_dev_workspace.setText(f"Workspace: {workspace_str}")
+            self.lbl_dev_issues.setText(f"Issues : {issues_str}")
+        else:
+            self.dev_box.setStyleSheet(f"border: 1px solid {C.BORDER_A}; background-color: #000d14;")
+            self.lbl_dev_title.setStyleSheet(f"color: {C.TEXT_DIM};")
+            self.lbl_dev_file.setText("File   : Inactive")
+            self.lbl_dev_lang.setText("Lang   : Inactive")
+            self.lbl_dev_workspace.setText("Workspace: Inactive")
+            self.lbl_dev_issues.setText("Issues : Inactive")
+
 class ProjectIntelligenceWindow(QWidget):
     _sig_update = pyqtSignal(dict)
 
@@ -1859,6 +2571,7 @@ class MainWindow(QMainWindow):
     _show_perf_sig = pyqtSignal(bool)
     _show_vision_sig = pyqtSignal(bool)
     _show_proj_intel_sig = pyqtSignal(bool)
+    relaunch_preview_widget_signal = pyqtSignal()
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -1892,9 +2605,18 @@ class MainWindow(QMainWindow):
         self._left_panel = self._build_left_panel()
         body.addWidget(self._left_panel, stretch=0)
 
+        # Central Stacked Widget holding Core HUD and new Vision Center Page
+        from PyQt6.QtWidgets import QStackedWidget
+        self.central_stack = QStackedWidget()
+        
         self.hud = HudCanvas(face_path)
         self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        body.addWidget(self.hud, stretch=5)
+        self.central_stack.addWidget(self.hud)
+        
+        self.vision_center = VisionCenterPage(self)
+        self.central_stack.addWidget(self.vision_center)
+        
+        body.addWidget(self.central_stack, stretch=5)
 
         self._right_panel = self._build_right_panel()
         body.addWidget(self._right_panel, stretch=0)
@@ -1907,7 +2629,6 @@ class MainWindow(QMainWindow):
         self._clock_tmr.start(1000)
         self._tick_clock()
 
-        # Metrik güncelleme timer'ı
         self._metric_tmr = QTimer(self)
         self._metric_tmr.timeout.connect(self._update_metrics)
         self._metric_tmr.start(2000)
@@ -1918,6 +2639,13 @@ class MainWindow(QMainWindow):
         self._show_perf_sig.connect(self._handle_perf_monitor)
         self._show_vision_sig.connect(self._handle_vision_panel)
         self._show_proj_intel_sig.connect(self._handle_proj_intel_panel)
+        self.relaunch_preview_widget_signal.connect(self._relaunch_preview_widget)
+
+        # Launch Vision Mode service and watchdog self-healing
+        self._vision_widget_enabled = True
+        import actions.vision_engine as ve
+        ve.start_vision_mode()
+        ve.init_vision_watchdog(self)
 
         self._overlay: SetupOverlay | None = None
         self._ready = self._check_config()
@@ -1929,11 +2657,14 @@ class MainWindow(QMainWindow):
         sc_full = QShortcut(QKeySequence("F11"), self)
         sc_full.activated.connect(self._toggle_fullscreen)
 
-    def _toggle_fullscreen(self):
-        if self.isFullScreen():
-            self.showNormal()
-        else:
-            self.showFullScreen()
+    def _relaunch_preview_widget(self):
+        if hasattr(self, "vision_preview_widget") and self.vision_preview_widget is not None:
+            try:
+                self.vision_preview_widget.show()
+                from actions.vision_engine import log_recovery_event
+                log_recovery_event("RECOVERED: VisionPreviewWidget shown/relaunched.")
+            except Exception:
+                pass
 
     def _handle_perf_monitor(self, open_window: bool):
         if open_window:
@@ -1952,20 +2683,15 @@ class MainWindow(QMainWindow):
 
     def _handle_vision_panel(self, open_window: bool):
         if open_window:
+            # Switch main view stack to embedded Vision Center Page directly instead of opening standalone window
+            self.central_stack.setCurrentIndex(1)
+            # Create the helper window object in-memory to keep consent callbacks working
             if not hasattr(self, "_vision_win") or self._vision_win is None:
                 self._vision_win = VisionIntelligenceWindow()
                 import actions.vision_engine as ve
                 ve.set_consent_callback(self._vision_win.request_consent_sync)
-            self._vision_win.show()
-            self._vision_win.raise_()
-            self._vision_win.activateWindow()
         else:
-            if hasattr(self, "_vision_win") and self._vision_win is not None:
-                try:
-                    self._vision_win.close()
-                except Exception:
-                    pass
-                self._vision_win = None
+            pass
 
     def _handle_proj_intel_panel(self, open_window: bool):
         if open_window:
@@ -2060,6 +2786,40 @@ class MainWindow(QMainWindow):
         lay.addWidget(_badge("NEXUS AI", C.PRI_DIM))
         lay.addStretch()
 
+        # Navigation buttons for switching stacked widget pages
+        nav_lay = QHBoxLayout(); nav_lay.setSpacing(6)
+        
+        btn_hud = QPushButton("CORE HUD")
+        btn_hud.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        btn_hud.setFixedSize(110, 26)
+        btn_hud.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_hud.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.PRI};
+                border: 1px solid {C.PRI_DIM}; border-radius: 3px;
+            }}
+            QPushButton:hover {{ background: {C.PRI_GHO}; border: 1px solid {C.PRI}; }}
+        """)
+        btn_hud.clicked.connect(lambda: self.central_stack.setCurrentIndex(0))
+        nav_lay.addWidget(btn_hud)
+
+        btn_vis = QPushButton("VISION CENTER")
+        btn_vis.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        btn_vis.setFixedSize(120, 26)
+        btn_vis.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_vis.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.PRI};
+                border: 1px solid {C.PRI_DIM}; border-radius: 3px;
+            }}
+            QPushButton:hover {{ background: {C.PRI_GHO}; border: 1px solid {C.PRI}; }}
+        """)
+        btn_vis.clicked.connect(lambda: self.central_stack.setCurrentIndex(1))
+        nav_lay.addWidget(btn_vis)
+        
+        lay.addLayout(nav_lay)
+        lay.addStretch()
+
         mid = QVBoxLayout(); mid.setSpacing(1)
         title = QLabel("NEXUS AI")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -2119,6 +2879,45 @@ class MainWindow(QMainWindow):
 
         lay.addSpacing(4)
 
+        # Embedded Vision Preview Panel
+        self.vision_preview_widget = VisionPreviewWidget(self)
+        
+        # Load and apply layout persistence
+        cfg = load_layout_config()
+        if not cfg.get("visible", True):
+            self.vision_preview_widget.hide()
+            self._vision_widget_enabled = False
+        else:
+            self._vision_widget_enabled = True
+            
+        expanded = cfg.get("expanded", False)
+        self.vision_preview_widget.expanded = expanded
+        
+        if cfg.get("collapsed", False):
+            self.vision_preview_widget.collapsed = True
+            self.vision_preview_widget.btn_collapse.setText("▼")
+            self.vision_preview_widget.preview_lbl.hide()
+            self.vision_preview_widget.status_widget.hide()
+            self.vision_preview_widget.btn_widget.hide()
+            self.vision_preview_widget.metric_widget.hide()
+            self.vision_preview_widget.setFixedHeight(30)
+        else:
+            if expanded:
+                self.vision_preview_widget.setFixedHeight(480)
+                self.vision_preview_widget.preview_lbl.setFixedHeight(384)
+                self.vision_preview_widget.preview_lbl.setMinimumSize(344, 384)
+                self.vision_preview_widget.btn_expand.setText("Shrink")
+                w.setFixedWidth(360)
+            else:
+                self.vision_preview_widget.setFixedHeight(320)
+                self.vision_preview_widget.preview_lbl.setFixedHeight(256)
+                self.vision_preview_widget.preview_lbl.setMinimumSize(234, 256)
+                self.vision_preview_widget.btn_expand.setText("Expand")
+                w.setFixedWidth(250)
+            
+        lay.addWidget(self.vision_preview_widget)
+        lay.addSpacing(4)
+
         info_panel = QWidget()
         info_panel.setStyleSheet(
             f"background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 4px;"
@@ -2145,20 +2944,6 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(info_panel)
         lay.addStretch()
-
-        for txt, col in [
-            ("AI CORE\nACTIVE",     C.GREEN),
-            ("SEC\nCLEARED",        C.PRI),
-            ("PROTOCOL\nXXXVIII",   C.TEXT_DIM),
-        ]:
-            lbl = QLabel(txt)
-            lbl.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet(
-                f"color: {col}; background: {C.PANEL2};"
-                f"border: 1px solid {C.BORDER_A}; border-radius: 3px; padding: 4px;"
-            )
-            lay.addWidget(lbl)
 
         return w
     def _build_right_panel(self) -> QWidget:
@@ -2304,6 +3089,14 @@ class MainWindow(QMainWindow):
             self._apply_state("LISTENING")
             self._log.append_log("SYS: Microphone active.")
 
+    def _toggle_fullscreen(self):
+        if self.isFullScreen():
+            self.showNormal()
+            self._log.append_log("SYS: Window returned to normal mode.")
+        else:
+            self.showFullScreen()
+            self._log.append_log("SYS: Window entered fullscreen mode.")
+
     def _style_mute_btn(self):
         if self._muted:
             self._mute_btn.setText("🔇  MICROPHONE MUTED")
@@ -2439,6 +3232,10 @@ class NexusAIUI:
 
     def show_vision_panel(self):
         self._win._show_vision_sig.emit(True)
+        try:
+            self._win.central_stack.setCurrentIndex(1)
+        except Exception:
+            pass
 
     def close_vision_panel(self):
         self._win._show_vision_sig.emit(False)

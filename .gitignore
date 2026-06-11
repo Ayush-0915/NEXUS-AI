@@ -16,3 +16,7 @@ workspace_registry.json.bak
 dist/
 build/
 desktop/
+config/nexus_ui_config.json
+scratch/temp_ocr_*.png
+scratch/vision_readiness_report.json
+scratch/capture_output.txt

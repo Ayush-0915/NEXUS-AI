@@ -44,6 +44,15 @@ NEXUS AI leverages custom action modules combined with a central planning and re
 ### 🎮 Game Library Management
 * **Launcher Integration**: Detects Steam and Epic Games installations from the Windows Registry to automatically launch, install, or update games from your local library.
 
+### 👁️ NEXUS Vision Mode
+* **Aspect-Ratio-Safe Screen Preview**: Displays the live monitor stream keeping native monitor proportions without cropping, stretching, or squashing.
+* **Dynamic Sidebar Widening**: Toggling the `[Expand]` option on the sidebar preview panel dynamically expands the left sidebar width from `250px` to `360px`, magnifying text details so VS Code filenames and browser tabs are visually recognizable.
+* **Vision Center Page**: A dedicated workspace monitoring console that allocates **75-85%** of the page area to a large screen viewer.
+* **Decoupled OCR Processing**: Offloads local winsdk OCR and AST analysis to an independent background worker thread (`OCRWorker`). Capture and rendering run smoothly at 10-15 FPS without stuttering on OCR latency.
+* **Multi-Monitor Switcher**: Sleek dashboard selectors `[M1]` (Monitor 1), `[M2]` (Monitor 2), and `[ALL]` (All Displays/Virtual Desktop) switch inputs dynamically in real time without restarting.
+* **Developer Workspace Monitor**: Automatically extracts active project context, current file, language, and compile errors/warnings when VS Code is in focus.
+* **Self-Healing Watchdog**: A background daemon monitors and auto-heals capture loops and UI widgets.
+
 ---
 
 ## 🏗️ Project Architecture

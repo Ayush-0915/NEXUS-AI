@@ -752,22 +752,48 @@ def analyze_self() -> dict:
     from main import TOOL_DECLARATIONS
     tool_inventory = [t["name"] for t in TOOL_DECLARATIONS]
     
+    # Query Vision Engine Diagnostics if running
+    vision_metrics = {}
+    try:
+        from actions.vision_engine import get_diagnostics, get_vision_service
+        vision_metrics = get_diagnostics()
+        service = get_vision_service()
+        vision_metrics["service_running"] = service._running
+        vision_metrics["service_paused"] = service.is_paused()
+    except Exception:
+        pass
+        
     # Capability Report
     capabilities = [
         "Interactive PyQt6 User Interface with HUD canvas visualizer",
         "Asynchronous Gemini Live API websocket interface",
         "Desktop automation (app launcher, mouse/keyboard triggers, browser automation)",
         "System telemetry inspector & telemetry health diagnoses",
-        "Vision OCR & screen analysis system",
+        "Real-Time Screen Awareness (continuous high-frequency screenshot capture service)",
+        "Smart Region-Based Change Detection with cropped OCR analysis",
+        "Self-Healing watchdog layer for automated capture restart & widget relaunch",
+        "Vision Memory Activity Timeline logging and querying",
+        "Developer Awareness AST Analyzer (detecting imports, classes, functions, code smells, and missing tests)",
+        "Privacy Controls application and process blacklisting system",
         "Long-term memory management with semantic key/value database",
-        "Project Intelligence Engine for folder/repository scanning and QA"
+        "Project Intelligence Engine for folder/repository scanning and QA",
+        "Vision Center Dashboard (dedicated monitoring dashboard page occupying 75-85% page area)",
+        "Multi-Monitor Support (source switching between primary, secondary, and all monitors)",
+        "Native OCR Pipeline (winsdk high-accuracy extraction with <100ms average latency)",
+        "Developer Workspace Monitor (VS Code file, project, workspace, and error tracking)",
+        "Decoupled OCR Processing (separate background thread prevents capture and UI stuttering)",
+        "Project-Aware Vision (integrating screen context with Project Intelligence Engine)",
+        "Self-Healing Vision Service (watchdog auto-restart and widget auto-relaunch layers)"
     ]
     
     # Agent Inventory
     agents = ["planner.py (Gemini-based Task Scheduler)", "executor.py (Sub-task executor, retry fallback agent)"]
     
     # Vision System Inventory
-    vision = ["actions/screen_processor.py (pyautogui capturing)", "actions/vision_engine.py (OCR, UI element detection)"]
+    vision = [
+        "actions/screen_processor.py (pyautogui capturing)",
+        "actions/vision_engine.py (OCR, Smart Region change detection, Vision Watchdog)"
+    ]
     
     # Memory System Inventory
     memory = ["memory/memory_manager.py (Memory extract / database save)", "memory/nexus_memory.db (sqlite3 long-term store)"]
@@ -777,24 +803,24 @@ def analyze_self() -> dict:
     client = _get_gemini_client()
     if client:
         prompt = f"""
-Generate a Self-Analysis Capability & Architecture Report for NEXUS AI.
-NEXUS AI Stats:
-Files: {scan['total_files']}, Lines: {scan['total_lines']}
-Tools: {tool_inventory}
-Agents: {agents}
-Vision System: {vision}
-Memory System: {memory}
-Code Smells: {len(smells)} detected.
-
-Please compile:
-1. Capability Report (explaining what NEXUS AI is capable of)
-2. Architecture Report
-3. Tool & Agent Inventory
-4. Vision & Memory Inventory
-5. Risks & Improvement Opportunities
-
-Write a beautiful, structured report in clean markdown/text format.
-"""
+        Generate a Self-Analysis Capability & Architecture Report for NEXUS AI.
+        NEXUS AI Stats:
+        Files: {scan['total_files']}, Lines: {scan['total_lines']}
+        Tools: {tool_inventory}
+        Agents: {agents}
+        Vision System: {vision} (Metrics: {json.dumps(vision_metrics)})
+        Memory System: {memory}
+        Code Smells: {len(smells)} detected.
+        
+        Please compile:
+        1. Capability Report (explaining what NEXUS AI is capable of, highlighting Vision Mode)
+        2. Architecture Report (detailing background threads, smart change detection, and watchdog mechanisms)
+        3. Tool & Agent Inventory
+        4. Vision & Memory Inventory (including performance telemetry)
+        5. Risks & Improvement Opportunities
+        
+        Write a beautiful, structured report in clean markdown/text format.
+        """
         try:
             response = client.models.generate_content(
                 model="gemini-2.5-flash",
@@ -814,7 +840,7 @@ Key Capabilities:
 ### Architecture Report
 - Core framework: Python / PyQt6 / Asyncio.
 - Agent system: Two-tier agent (Planner/Executor) with dynamic error recovery.
-- Vision modules: Screen captures, OCR, and coordinate mappings.
+- Vision modules: Screen captures, region change detection, and watchdog self-healing.
 - Memory: Structured key-value store using SQLite3.
 
 ### Tool & Agent Inventory
@@ -823,6 +849,7 @@ Key Capabilities:
 
 ### Vision & Memory Inventory
 - Vision files: {', '.join(vision)}
+- Vision Metrics: OCR Latency={vision_metrics.get('ocr_latency_ms')}ms, Capture Latency={vision_metrics.get('capture_latency_ms')}ms, Service Running={vision_metrics.get('service_running')}
 - Memory database: {', '.join(memory)}
 
 ### Risks & Improvement Opportunities
