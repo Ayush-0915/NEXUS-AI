@@ -25,6 +25,7 @@ from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
     should_extract_memory, extract_memory
 )
+from memory.memory_engine import MemoryEngine
 
 from actions.file_processor import file_processor
 from actions.flight_finder     import flight_finder
@@ -84,7 +85,7 @@ def _load_system_prompt() -> str:
     
 _last_memory_input = ""
 
-def _update_memory_async(user_text: str, nexus_text: str) -> None:
+def _update_memory_async(user_text: str, nexus_text: str, ui=None) -> None:
     global _last_memory_input
 
     user_text   = (user_text   or "").strip()
@@ -93,6 +94,36 @@ def _update_memory_async(user_text: str, nexus_text: str) -> None:
     if len(user_text) < 5 or user_text == _last_memory_input:
         return
     _last_memory_input = user_text
+
+    # Take workspace snapshot & run background consolidation, aging, capability checks
+    try:
+        engine = MemoryEngine()
+        import subprocess
+        branch = "main"
+        try:
+            res = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=str(BASE_DIR), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2
+            )
+            if res.returncode == 0:
+                branch = res.stdout.strip()
+        except Exception:
+            pass
+            
+        open_files = [ui.current_file] if (ui and ui.current_file) else []
+        engine.save_workspace_snapshot(
+            active_project=str(BASE_DIR),
+            open_files=open_files,
+            active_branch=branch,
+            current_task=""
+        )
+        
+        # Background consolidation & aging
+        engine.consolidate_memories()
+        engine.run_aging_lifecycle()
+        engine.trigger_auto_analysis()
+    except Exception as e:
+        print(f"[MemoryEngine] Background tasks failed: {e}")
 
     try:
         api_key = _get_api_key()
@@ -681,6 +712,12 @@ class NexusLive:
         if not self._loop or not self.session:
             return
 
+        # Log user text query
+        try:
+            MemoryEngine().log_chat_turn("user", text)
+        except Exception as e:
+            print(f"[MemoryEngine] Chat turn logging failed: {e}")
+
         t_lower = text.lower().strip()
         vision_keywords = [
             "what is on my screen", "what is on screen", "analyze my screen", "analyze the screen",
@@ -901,6 +938,35 @@ class NexusLive:
             result = analyze_storage(parameters={}, player=self.ui)
             self.ui.write_log(result)
             self.speak("Scanning user folders for storage utilization.")
+            return
+
+        # Check recall commands
+        recall_keywords = [
+            "working on yesterday", "yesterday's session",
+            "continue my last coding session", "continue last session", "continue last coding session",
+            "architecture decisions", "show decisions",
+            "vision mode history", "show vision history",
+            "bugs were fixed", "fixed bugs",
+            "project milestones", "show milestones"
+        ]
+        is_recall = any(kw in t_lower for kw in recall_keywords) or t_lower.startswith("recall:") or t_lower.startswith("search memory")
+        if is_recall:
+            def run_recall_worker():
+                try:
+                    self.ui.set_state("PROCESSING")
+                    engine = MemoryEngine()
+                    result = engine.handle_recall_command(text)
+                    self.ui.write_log(f"NEXUS Memory: {result}")
+                    first_line = result.split("\n")[0]
+                    self.speak(first_line)
+                except Exception as e:
+                    print(f"[MemoryEngine] Recall worker failed: {e}")
+                    self.ui.write_log(f"SYS: Memory recall failed: {e}")
+                    self.speak("I encountered an error recalling that from memory.")
+                finally:
+                    if not self.ui.muted:
+                        self.ui.set_state("LISTENING")
+            threading.Thread(target=run_recall_worker, daemon=True).start()
             return
 
         asyncio.run_coroutine_threadsafe(
@@ -1203,6 +1269,11 @@ class NexusLive:
             elif name == "shutdown_nexus":
                 self.ui.write_log("SYS: Shutdown requested.")
                 self.speak("NEXUS AI offline.")
+                
+                try:
+                    MemoryEngine().end_session()
+                except Exception as e:
+                    print(f"[MemoryEngine] Failed to end session on shutdown: {e}")
 
                 def _shutdown():
                     import time, sys, os
@@ -1299,17 +1370,25 @@ class NexusLive:
                             if full_in:
                                 self.ui.write_log(f"You: {full_in}")
                                 print("\n[VOICE]\nSTT Finished: True\n")
+                                try:
+                                    MemoryEngine().log_chat_turn("user", full_in)
+                                except Exception as e:
+                                    print(f"[MemoryEngine] Voice input log error: {e}")
                             in_buf = []
 
                             full_out = " ".join(out_buf).strip()
                             if full_out:
                                 self.ui.write_log(f"NEXUS AI: {full_out}")
+                                try:
+                                    MemoryEngine().log_chat_turn("model", full_out)
+                                except Exception as e:
+                                    print(f"[MemoryEngine] Voice output log error: {e}")
                             out_buf = []
 
                             if full_in and len(full_in) > 5:
                                 threading.Thread(
                                     target=_update_memory_async,
-                                    args=(full_in, full_out),
+                                    args=(full_in, full_out, self.ui),
                                     daemon=True
                                 ).start()
 
@@ -1509,6 +1588,10 @@ def main():
 
     def runner():
         ui.wait_for_api_key()
+        try:
+            MemoryEngine().start_session(active_workspace=str(BASE_DIR))
+        except Exception as e:
+            print(f"[MemoryEngine] Failed to start startup session: {e}")
         nexus = NexusLive(ui)
         try:
             asyncio.run(nexus.run())

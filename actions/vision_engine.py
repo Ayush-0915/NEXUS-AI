@@ -265,6 +265,11 @@ def _get_explorer_path(hwnd: int) -> Optional[str]:
 def capture_screenshot() -> Image.Image:
     """Captures selected monitor screenshot and caches the PIL image."""
     global _screenshot_cache, _capture_latency, _selected_monitor_idx
+    state_mgr = VisionStateManager.get_instance()
+    if not state_mgr.is_sharing_active():
+        img = Image.new("RGB", (800, 600), (0, 0, 0))
+        _screenshot_cache = img
+        return img
     t0 = time.perf_counter()
     with mss.mss() as sct:
         idx = _selected_monitor_idx
@@ -486,6 +491,25 @@ def analyze_screen(query: str = "Analyze screen") -> Dict[str, Any]:
     global _last_analysis_time, _processing_duration
     t_start = time.perf_counter()
     
+    if vision_analysis.is_paused():
+        return {
+            "timestamp": time.strftime("%H:%M:%S"),
+            "duration": "0.00s",
+            "active_window": {
+                "hwnd": 0,
+                "title": "SCREEN SHARING PAUSED",
+                "process_name": "Unknown",
+                "class_name": "Unknown",
+                "app_type": "Unknown",
+                "special_info": {}
+            },
+            "ocr_available": False,
+            "ocr_text": "",
+            "error": None,
+            "ui_elements": [],
+            "raw_image": None
+        }
+
     img = capture_screenshot()
     win_info = get_current_window_info()
     
@@ -697,6 +721,167 @@ def get_monitors_count() -> int:
     except Exception:
         return 1
 
+UI_CONFIG_FILE = Path(__file__).resolve().parent.parent / "config" / "nexus_ui_config.json"
+
+def _load_ui_config() -> dict:
+    if UI_CONFIG_FILE.exists():
+        try:
+            import json
+            with open(UI_CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "collapsed": False,
+        "visible": True,
+        "expanded": False,
+        "sharing_active": True,
+        "accessibility_preset": "NORMAL"
+    }
+
+def _save_ui_config_state(sharing_active: bool, accessibility_preset: str):
+    try:
+        import json
+        config = _load_ui_config()
+        config["sharing_active"] = sharing_active
+        config["accessibility_preset"] = accessibility_preset
+        UI_CONFIG_FILE.parent.mkdir(exist_ok=True)
+        with open(UI_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f)
+    except Exception as e:
+        print(f"[VisionEngine] Failed to save config: {e}")
+
+class VisionStateManager:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._sharing_active = True
+        self._accessibility_preset = "NORMAL"
+        self._subscribers = []
+
+        # Load persisted settings
+        config = _load_ui_config()
+        self._sharing_active = config.get("sharing_active", True)
+        self._accessibility_preset = config.get("accessibility_preset", "NORMAL")
+
+    def is_sharing_active(self) -> bool:
+        with self._lock:
+            return self._sharing_active
+
+    def set_sharing_active(self, active: bool):
+        with self._lock:
+            if self._sharing_active == active:
+                return
+            self._sharing_active = active
+            preset = self._accessibility_preset
+        
+        # Save config
+        _save_ui_config_state(active, preset)
+
+        # Control pipeline components
+        if active:
+            capture_thread.resume()
+            ocr_worker.resume()
+            vision_analysis.resume()
+        else:
+            capture_thread.pause()
+            ocr_worker.pause()
+            vision_analysis.pause()
+
+        self.notify_subscribers()
+
+    def get_accessibility_preset(self) -> str:
+        with self._lock:
+            return self._accessibility_preset
+
+    def set_accessibility_preset(self, preset: str):
+        with self._lock:
+            if preset not in ("NORMAL", "LARGE", "EXTRA LARGE"):
+                return
+            if self._accessibility_preset == preset:
+                return
+            self._accessibility_preset = preset
+            active = self._sharing_active
+
+        # Save config
+        _save_ui_config_state(active, preset)
+
+        self.notify_subscribers()
+
+    def get_vision_status(self) -> str:
+        if not self.is_sharing_active():
+            return "PAUSED"
+        service = get_vision_service()
+        if not service._running:
+            return "IDLE"
+        return "ACTIVE"
+
+    def get_ocr_status(self) -> str:
+        if not self.is_sharing_active():
+            return "DISABLED"
+        global _ocr_worker
+        if _ocr_worker is not None and _ocr_worker.is_busy:
+            return "ACTIVE"
+        return "IDLE"
+
+    def register_subscriber(self, callback):
+        with self._lock:
+            if callback not in self._subscribers:
+                self._subscribers.append(callback)
+
+    def unregister_subscriber(self, callback):
+        with self._lock:
+            if callback in self._subscribers:
+                self._subscribers.remove(callback)
+
+    def notify_subscribers(self):
+        with self._lock:
+            subs = list(self._subscribers)
+        for sub in subs:
+            try:
+                sub()
+            except Exception as e:
+                print(f"[VisionStateManager] Error notifying subscriber: {e}")
+
+class CaptureThreadProxy:
+    def pause(self):
+        get_vision_service().pause()
+    def resume(self):
+        get_vision_service().resume()
+    def is_paused(self):
+        return get_vision_service().is_paused()
+
+class OCRWorkerProxy:
+    def pause(self):
+        global _ocr_worker
+        if _ocr_worker is not None:
+            _ocr_worker.pause()
+    def resume(self):
+        global _ocr_worker
+        if _ocr_worker is not None:
+            _ocr_worker.resume()
+
+class VisionAnalysisControl:
+    def __init__(self):
+        self._paused = False
+    def pause(self):
+        self._paused = True
+    def resume(self):
+        self._paused = False
+    def is_paused(self):
+        return self._paused
+
+capture_thread = CaptureThreadProxy()
+ocr_worker = OCRWorkerProxy()
+vision_analysis = VisionAnalysisControl()
+
 class OCRWorker(threading.Thread):
     def __init__(self):
         super().__init__(name="NEXUS_VisionOCR", daemon=True)
@@ -707,6 +892,23 @@ class OCRWorker(threading.Thread):
         self._running = True
         self.is_busy = False
         
+        # Check initial sharing state
+        state_mgr = VisionStateManager.get_instance()
+        self._paused = not state_mgr.is_sharing_active()
+        
+    def pause(self):
+        with self.cond:
+            self._paused = True
+            self.pending_image = None
+            self.pending_win_info = None
+            self.pending_changed_indices = None
+            self.cond.notify_all()
+            
+    def resume(self):
+        with self.cond:
+            self._paused = False
+            self.cond.notify_all()
+        
     def run(self):
         global _last_analysis_time, _context_memory
         while self._running:
@@ -715,6 +917,11 @@ class OCRWorker(threading.Thread):
                     self.cond.wait()
                 if not self._running:
                     break
+                if self._paused:
+                    self.pending_image = None
+                    self.pending_win_info = None
+                    self.pending_changed_indices = None
+                    continue
                 img = self.pending_image
                 win_info = self.pending_win_info
                 changed_indices = self.pending_changed_indices
@@ -724,6 +931,8 @@ class OCRWorker(threading.Thread):
                 self.is_busy = True
                 
             try:
+                if self._paused:
+                    continue
                 # Region cropping & OCR
                 W, H = img.size
                 min_x, min_y, max_x, max_y = W, H, 0, 0
@@ -743,8 +952,12 @@ class OCRWorker(threading.Thread):
                 ocr_text = ""
                 if max_x > min_x and max_y > min_y:
                     cropped = img.crop((min_x, min_y, max_x, max_y))
+                    if self._paused:
+                        continue
                     ocr_text = run_local_ocr(cropped)
                     
+                if self._paused:
+                    continue
                 # Extract Context & Activities
                 activity_type, details = classify_activity(win_info)
                 update_memory_context(win_info, ocr_text, activity_type, details)
@@ -762,7 +975,7 @@ class OCRWorker(threading.Thread):
 
     def trigger_ocr(self, img, win_info, changed_indices) -> bool:
         with self.cond:
-            if self.is_busy:
+            if self.is_busy or self._paused:
                 return False
             self.pending_image = img
             self.pending_win_info = win_info
@@ -1193,6 +1406,18 @@ def extract_developer_insights(win_info: Dict[str, Any]) -> Dict[str, Any]:
 
 def get_vision_context() -> Dict[str, Any]:
     global _context_memory
+    state_mgr = VisionStateManager.get_instance()
+    if not state_mgr.is_sharing_active():
+        return {
+            "active_window": "SCREEN SHARING PAUSED",
+            "detected_apps": [],
+            "visible_text": "",
+            "project_context": "",
+            "current_project": "None",
+            "current_file": "None",
+            "current_task": "None",
+            "current_application": "None"
+        }
     return _context_memory
 
 # =====================================================================

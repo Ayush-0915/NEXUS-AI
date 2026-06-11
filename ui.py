@@ -1643,20 +1643,91 @@ UI_CONFIG_FILE = BASE_DIR / "config" / "nexus_ui_config.json"
 
 def save_layout_config(collapsed: bool, visible: bool, expanded: bool = False):
     try:
+        from actions.vision_engine import _load_ui_config, UI_CONFIG_FILE
+        config = _load_ui_config()
+        config["collapsed"] = collapsed
+        config["visible"] = visible
+        config["expanded"] = expanded
         UI_CONFIG_FILE.parent.mkdir(exist_ok=True)
         with open(UI_CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump({"collapsed": collapsed, "visible": visible, "expanded": expanded}, f)
+            json.dump(config, f)
     except Exception as e:
         print(f"[UI Config] Failed to save: {e}")
 
 def load_layout_config() -> dict:
-    if UI_CONFIG_FILE.exists():
-        try:
-            with open(UI_CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"collapsed": False, "visible": True, "expanded": False}
+    from actions.vision_engine import _load_ui_config
+    return _load_ui_config()
+
+
+class CyberpunkButton(QPushButton):
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.preset = "NORMAL"
+        
+        # Hardware-accelerated glow effect
+        from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+        self.glow = QGraphicsDropShadowEffect(self)
+        self.glow.setOffset(0, 0)
+        self.glow.setColor(QColor("#00f0ff"))
+        self.glow.setBlurRadius(12)
+        self.setGraphicsEffect(self.glow)
+        self.glow.setEnabled(False)
+        self.apply_style()
+
+    def apply_style(self):
+        if self.preset == "EXTRA LARGE":
+            h = 54
+            fs = 14
+            padding = "8px 16px"
+        elif self.preset == "LARGE":
+            h = 45
+            fs = 12
+            padding = "6px 12px"
+        else:
+            h = 36
+            fs = 10
+            padding = "4px 8px"
+
+        self.setFixedHeight(h)
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background-color: rgba(0, 13, 20, 0.85);
+                color: #00f0ff;
+                border: 1.5px solid #00f0ff;
+                border-radius: 4px;
+                font-family: 'Courier New';
+                font-size: {fs}px;
+                font-weight: bold;
+                padding: {padding};
+                text-transform: uppercase;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(0, 240, 255, 0.15);
+                color: #ffffff;
+                border: 1.5px solid #ffffff;
+            }}
+            QPushButton:pressed {{
+                background-color: rgba(0, 240, 255, 0.3);
+            }}
+            QPushButton:disabled {{
+                color: #3a8a9a;
+                border: 1.5px solid #0d3347;
+                background-color: #00080d;
+            }}
+        """)
+
+    def set_preset(self, preset: str):
+        self.preset = preset
+        self.apply_style()
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self.glow.setEnabled(True)
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self.glow.setEnabled(False)
 
 
 class VisionPreviewWidget(QWidget):
@@ -1708,20 +1779,20 @@ class VisionPreviewWidget(QWidget):
         self.glow_effect.setEnabled(False)
         self.glow_angle = 0
         
-        # Main layout - packed tightly to fit in total height
-        v_lay = QVBoxLayout(self)
-        v_lay.setContentsMargins(4, 4, 4, 4)
-        v_lay.setSpacing(2)
+        # Main layout
+        self.v_lay = QVBoxLayout(self)
+        self.v_lay.setContentsMargins(4, 4, 4, 4)
+        self.v_lay.setSpacing(2)
         
         # Header Row: "◈ NEXUS VISION" | Collapse Button
         hdr_lay = QHBoxLayout()
         hdr_lay.setContentsMargins(2, 0, 2, 0)
         hdr_lay.setSpacing(2)
         
-        lbl_title = QLabel("◈ NEXUS VISION")
-        lbl_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-        lbl_title.setStyleSheet(f"color: {C.WHITE};")
-        hdr_lay.addWidget(lbl_title)
+        self.lbl_title = QLabel("◈ NEXUS VISION")
+        self.lbl_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self.lbl_title.setStyleSheet(f"color: {C.WHITE};")
+        hdr_lay.addWidget(self.lbl_title)
         
         hdr_lay.addStretch()
         
@@ -1731,12 +1802,12 @@ class VisionPreviewWidget(QWidget):
         self.btn_collapse.clicked.connect(self.toggle_collapse)
         hdr_lay.addWidget(self.btn_collapse)
         
-        v_lay.addLayout(hdr_lay)
+        self.v_lay.addLayout(hdr_lay)
         
         # Status indicators: Cap, Ana, Idle
         self.status_widget = QWidget()
         self.status_widget.setStyleSheet("border: none; background: transparent;")
-        self.status_widget.setFixedHeight(10)
+        self.status_widget.setFixedHeight(12)
         stat_lay = QHBoxLayout(self.status_widget)
         stat_lay.setContentsMargins(2, 0, 2, 0)
         stat_lay.setSpacing(4)
@@ -1756,77 +1827,94 @@ class VisionPreviewWidget(QWidget):
         stat_lay.addWidget(self.lbl_capturing)
         stat_lay.addWidget(self.lbl_analyzing)
         stat_lay.addWidget(self.lbl_idle)
-        v_lay.addWidget(self.status_widget)
+        self.v_lay.addWidget(self.status_widget)
         
-        # Live Preview Image box (occupies 80% height in normal/expanded modes)
+        # Live Preview Image box
         self.preview_lbl = QLabel("Awaiting frame...")
         self.preview_lbl.setFont(QFont("Courier New", 7))
         self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_lbl.setMinimumSize(226, 256)
         self.preview_lbl.setFixedHeight(256)
         self.preview_lbl.setStyleSheet(f"background-color: #000d14; border: 1px solid {C.BORDER}; border-radius: 2px;")
-        v_lay.addWidget(self.preview_lbl, alignment=Qt.AlignmentFlag.AlignCenter)
+        self.v_lay.addWidget(self.preview_lbl, alignment=Qt.AlignmentFlag.AlignCenter)
         
-        # Compact Controls Toolbar: Pause, Resume, Expand, Config
+        # Controls Layout
         self.btn_widget = QWidget()
         self.btn_widget.setStyleSheet("border: none; background: transparent;")
-        self.btn_widget.setFixedHeight(16)
-        btn_lay = QHBoxLayout(self.btn_widget)
-        btn_lay.setContentsMargins(0, 0, 0, 0)
-        btn_lay.setSpacing(3)
+        self.btn_lay = QVBoxLayout(self.btn_widget)
+        self.btn_lay.setContentsMargins(0, 0, 0, 0)
+        self.btn_lay.setSpacing(3)
+        
+        # Row 1: Pause / Resume
+        self.btn_widget_row1 = QWidget()
+        self.btn_lay_row1 = QHBoxLayout(self.btn_widget_row1)
+        self.btn_lay_row1.setContentsMargins(0, 0, 0, 0)
+        self.btn_lay_row1.setSpacing(3)
         
         self.btn_pause = QPushButton("Pause")
         self.btn_pause.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_pause.clicked.connect(self._pause_capture)
-        btn_lay.addWidget(self.btn_pause)
+        self.btn_lay_row1.addWidget(self.btn_pause)
         
         self.btn_resume = QPushButton("Resume")
         self.btn_resume.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_resume.clicked.connect(self._resume_capture)
-        btn_lay.addWidget(self.btn_resume)
+        self.btn_lay_row1.addWidget(self.btn_resume)
+        self.btn_lay.addWidget(self.btn_widget_row1)
+        
+        # Row 2: Cyberpunk screen sharing toggle
+        self.btn_sharing_toggle = CyberpunkButton("START SHARING", self)
+        self.btn_sharing_toggle.clicked.connect(self.toggle_sharing)
+        self.btn_lay.addWidget(self.btn_sharing_toggle)
+        
+        # Row 3: Expand / Config
+        self.btn_widget_row2 = QWidget()
+        self.btn_lay_row2 = QHBoxLayout(self.btn_widget_row2)
+        self.btn_lay_row2.setContentsMargins(0, 0, 0, 0)
+        self.btn_lay_row2.setSpacing(3)
         
         self.btn_expand = QPushButton("Expand")
         self.btn_expand.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_expand.clicked.connect(self.toggle_expand)
-        btn_lay.addWidget(self.btn_expand)
+        self.btn_lay_row2.addWidget(self.btn_expand)
         
         self.btn_settings = QPushButton("Config")
         self.btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_settings.clicked.connect(self._open_settings)
-        btn_lay.addWidget(self.btn_settings)
+        self.btn_lay_row2.addWidget(self.btn_settings)
+        self.btn_lay.addWidget(self.btn_widget_row2)
         
-        v_lay.addWidget(self.btn_widget)
+        self.v_lay.addWidget(self.btn_widget)
         
-        # Footer Diagnostics Panel: 3 rows of detailed telemetry
+        # Stacked Telemetry layout
         self.metric_widget = QWidget()
         self.metric_widget.setStyleSheet("border: none; background: transparent;")
-        self.metric_widget.setFixedHeight(32)
-        metric_lay = QVBoxLayout(self.metric_widget)
-        metric_lay.setContentsMargins(2, 0, 2, 0)
-        metric_lay.setSpacing(1)
+        self.metric_lay = QVBoxLayout(self.metric_widget)
+        self.metric_lay.setContentsMargins(2, 0, 2, 0)
+        self.metric_lay.setSpacing(1)
         
-        self.lbl_row1 = QLabel("FPS: P:0.0 C:0.0 | CHG:0")
-        self.lbl_row1.setFont(QFont("Courier New", 7))
-        self.lbl_row1.setStyleSheet(f"color: {C.TEXT_MED};")
-        metric_lay.addWidget(self.lbl_row1)
+        self.lbl_fps = QLabel("FPS: --")
+        self.lbl_ocr = QLabel("OCR: --")
+        self.lbl_resolution = QLabel("Resolution: --")
+        self.lbl_latency = QLabel("Latency: --")
+        self.lbl_changes = QLabel("Changes: --")
         
-        self.lbl_row2 = QLabel("LAT: R:0ms O:0ms")
-        self.lbl_row2.setFont(QFont("Courier New", 7))
-        self.lbl_row2.setStyleSheet(f"color: {C.TEXT_MED};")
-        metric_lay.addWidget(self.lbl_row2)
+        for lbl in (self.lbl_fps, self.lbl_ocr, self.lbl_resolution, self.lbl_latency, self.lbl_changes):
+            lbl.setFont(QFont("Courier New", 7))
+            lbl.setStyleSheet(f"color: {C.TEXT_MED};")
+            self.metric_lay.addWidget(lbl)
+            
+        self.v_lay.addWidget(self.metric_widget)
         
-        self.lbl_row3 = QLabel("RES: 1920x1080 | DRP:0")
-        self.lbl_row3.setFont(QFont("Courier New", 7))
-        self.lbl_row3.setStyleSheet(f"color: {C.TEXT_MED};")
-        metric_lay.addWidget(self.lbl_row3)
+        # Subscribe to state manager
+        from actions.vision_engine import VisionStateManager
+        VisionStateManager.get_instance().register_subscriber(self.on_state_changed)
         
-        v_lay.addWidget(self.metric_widget)
+        # Apply initial settings/presets
+        self.apply_preset()
+        self.refresh_preview()
         
-        # Set default geometry properties
-        self.setFixedHeight(320)
-        self.update_sidebar_size()
-        
-        # Timers Setup - UI Refresh Timer runs at 12.5 FPS (80ms)
+        # Timers Setup
         self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self.refresh_preview)
         self.update_timer.start(80)
@@ -1834,7 +1922,93 @@ class VisionPreviewWidget(QWidget):
         self.glow_timer = QTimer(self)
         self.glow_timer.timeout.connect(self.animate_glow)
         self.glow_timer.start(80)
+
+    def closeEvent(self, event):
+        from actions.vision_engine import VisionStateManager
+        try:
+            VisionStateManager.get_instance().unregister_subscriber(self.on_state_changed)
+        except Exception:
+            pass
+        super().closeEvent(event)
+
+    def on_state_changed(self):
+        self.refresh_preview()
+        self.apply_preset()
+
+    def toggle_sharing(self):
+        from actions.vision_engine import VisionStateManager
+        state_mgr = VisionStateManager.get_instance()
+        current = state_mgr.is_sharing_active()
+        state_mgr.set_sharing_active(not current)
+
+    def apply_preset(self):
+        from actions.vision_engine import VisionStateManager
+        state_mgr = VisionStateManager.get_instance()
+        preset = state_mgr.get_accessibility_preset()
         
+        if preset == "EXTRA LARGE":
+            scale_font = 1.50
+            scale_spacing = 1.50
+            scale_heights = 1.50
+        elif preset == "LARGE":
+            scale_font = 1.25
+            scale_spacing = 1.25
+            scale_heights = 1.25
+        else:
+            scale_font = 1.00
+            scale_spacing = 1.00
+            scale_heights = 1.00
+            
+        fs_hdr = int(12 * scale_font)
+        fs_status = int(10 * scale_font)
+        fs_metrics = int(10 * scale_font)
+        fs_btn = int(11 * scale_font)
+        
+        self.lbl_title.setFont(QFont("Courier New", fs_hdr, QFont.Weight.Bold))
+        self.btn_collapse.setFont(QFont("Courier New", fs_status, QFont.Weight.Bold))
+        
+        self.lbl_capturing.setFont(QFont("Courier New", fs_status, QFont.Weight.Bold))
+        self.lbl_analyzing.setFont(QFont("Courier New", fs_status, QFont.Weight.Bold))
+        self.lbl_idle.setFont(QFont("Courier New", fs_status, QFont.Weight.Bold))
+        
+        self.btn_pause.setFont(QFont("Courier New", fs_btn, QFont.Weight.Bold))
+        self.btn_resume.setFont(QFont("Courier New", fs_btn, QFont.Weight.Bold))
+        self.btn_expand.setFont(QFont("Courier New", fs_btn, QFont.Weight.Bold))
+        self.btn_settings.setFont(QFont("Courier New", fs_btn, QFont.Weight.Bold))
+        
+        for lbl in (self.lbl_fps, self.lbl_ocr, self.lbl_resolution, self.lbl_latency, self.lbl_changes):
+            lbl.setFont(QFont("Courier New", fs_metrics))
+            
+        self.preview_lbl.setFont(QFont("Courier New", fs_metrics))
+        self.btn_sharing_toggle.set_preset(preset)
+        
+        btn_h = int(24 * scale_heights)
+        self.btn_pause.setFixedHeight(btn_h)
+        self.btn_resume.setFixedHeight(btn_h)
+        self.btn_expand.setFixedHeight(btn_h)
+        self.btn_settings.setFixedHeight(btn_h)
+        
+        spacing = int(4 * scale_spacing)
+        self.v_lay.setSpacing(spacing)
+        self.btn_lay.setSpacing(spacing)
+        self.btn_lay_row1.setSpacing(spacing)
+        self.btn_lay_row2.setSpacing(spacing)
+        self.metric_lay.setSpacing(spacing)
+        
+        if self.collapsed:
+            self.setFixedHeight(int(34 * scale_heights))
+        else:
+            if self.expanded:
+                self.preview_lbl.setFixedHeight(int(384 * scale_heights))
+                self.preview_lbl.setMinimumSize(int(336 * scale_heights), int(384 * scale_heights))
+                self.setFixedHeight(int(650 * scale_heights))
+            else:
+                self.preview_lbl.setFixedHeight(int(256 * scale_heights))
+                self.preview_lbl.setMinimumSize(int(226 * scale_heights), int(256 * scale_heights))
+                self.setFixedHeight(int(490 * scale_heights))
+                
+        self.update_sidebar_size()
+
     def update_sidebar_size(self):
         from actions.vision_engine import set_target_sidebar_size
         w = max(1, self.preview_lbl.width())
@@ -1847,20 +2021,14 @@ class VisionPreviewWidget(QWidget):
         self.expanded = not self.expanded
         if self.expanded:
             self.btn_expand.setText("Shrink")
-            self.setFixedHeight(480)
-            self.preview_lbl.setFixedHeight(384)
-            self.preview_lbl.setMinimumSize(336, 384)
             if self.main_window and hasattr(self.main_window, "_left_panel"):
                 self.main_window._left_panel.setFixedWidth(360)
         else:
             self.btn_expand.setText("Expand")
-            self.setFixedHeight(320)
-            self.preview_lbl.setFixedHeight(256)
-            self.preview_lbl.setMinimumSize(226, 256)
             if self.main_window and hasattr(self.main_window, "_left_panel"):
                 self.main_window._left_panel.setFixedWidth(250)
             
-        self.update_sidebar_size()
+        self.apply_preset()
         save_layout_config(self.collapsed, self.isVisible(), self.expanded)
         
     def toggle_collapse(self):
@@ -1871,38 +2039,23 @@ class VisionPreviewWidget(QWidget):
             self.status_widget.hide()
             self.btn_widget.hide()
             self.metric_widget.hide()
-            self.setFixedHeight(30)
         else:
             self.btn_collapse.setText("▲")
             self.preview_lbl.show()
             self.status_widget.show()
             self.btn_widget.show()
             self.metric_widget.show()
-            if self.expanded:
-                self.setFixedHeight(480)
-                self.preview_lbl.setFixedHeight(384)
-                self.preview_lbl.setMinimumSize(336, 384)
-                if self.main_window and hasattr(self.main_window, "_left_panel"):
-                    self.main_window._left_panel.setFixedWidth(360)
-            else:
-                self.setFixedHeight(320)
-                self.preview_lbl.setFixedHeight(256)
-                self.preview_lbl.setMinimumSize(226, 256)
-                if self.main_window and hasattr(self.main_window, "_left_panel"):
-                    self.main_window._left_panel.setFixedWidth(250)
-                
-        self.update_sidebar_size()
+            
+        self.apply_preset()
         save_layout_config(self.collapsed, self.isVisible(), self.expanded)
         
     def _pause_capture(self):
         from actions.vision_engine import pause_vision_mode
         pause_vision_mode()
-        self.refresh_preview()
         
     def _resume_capture(self):
         from actions.vision_engine import resume_vision_mode
         resume_vision_mode()
-        self.refresh_preview()
         
     def _open_settings(self):
         if self.main_window:
@@ -1924,10 +2077,46 @@ class VisionPreviewWidget(QWidget):
     def refresh_preview(self):
         import time
         from actions.vision_engine import get_diagnostics, get_vision_service, _vision_lock
-        from actions.vision_engine import _frame_id, _display_frame_sidebar
+        from actions.vision_engine import _frame_id, _display_frame_sidebar, VisionStateManager
         import actions.vision_engine as ve
         
-        # 1. Calculate rendering FPS in real time
+        state_mgr = VisionStateManager.get_instance()
+        sharing_active = state_mgr.is_sharing_active()
+        
+        if sharing_active:
+            self.btn_sharing_toggle.setText("STOP SHARING")
+        else:
+            self.btn_sharing_toggle.setText("START SHARING")
+            
+        service = get_vision_service()
+        diag = get_diagnostics()
+        
+        if not sharing_active:
+            self.status = "Idle"
+            self.lbl_capturing.setStyleSheet(f"color: {C.TEXT_DIM};")
+            self.lbl_analyzing.setStyleSheet(f"color: {C.TEXT_DIM};")
+            self.lbl_idle.setStyleSheet(f"color: {C.RED};")
+            self.lbl_idle.setText("● SCREEN SHARING DISABLED")
+            self.lbl_capturing.hide()
+            self.lbl_analyzing.hide()
+        else:
+            self.lbl_capturing.show()
+            self.lbl_analyzing.show()
+            self.lbl_idle.setText("● Idle")
+            
+            if service.is_paused():
+                self.status = "Idle"
+            elif diag.get("ocr_latency_ms", 0.0) > 0.0 or diag.get("change_detection_ms", 0.0) > 0.0:
+                self.status = "Analyzing"
+            elif service._running:
+                self.status = "Capturing"
+            else:
+                self.status = "Idle"
+                
+            self.lbl_capturing.setStyleSheet(f"color: {C.GREEN if self.status == 'Capturing' else C.TEXT_DIM};")
+            self.lbl_analyzing.setStyleSheet(f"color: {C.PRI if self.status == 'Analyzing' else C.TEXT_DIM};")
+            self.lbl_idle.setStyleSheet(f"color: {C.RED if self.status == 'Idle' else C.TEXT_DIM};")
+            
         t_now = time.perf_counter()
         if hasattr(self, '_last_render_time'):
             dt = t_now - self._last_render_time
@@ -1937,40 +2126,51 @@ class VisionPreviewWidget(QWidget):
         self._last_render_time = t_now
         ve._render_fps = preview_fps
         
-        diag = get_diagnostics()
-        service = get_vision_service()
-        
-        # 2. Capture Status
-        if service.is_paused():
-            self.status = "Idle"
-        elif diag.get("ocr_latency_ms", 0.0) > 0.0 or diag.get("change_detection_ms", 0.0) > 0.0:
-            self.status = "Analyzing"
-        elif service._running:
-            self.status = "Capturing"
-        else:
-            self.status = "Idle"
-            
-        self.lbl_capturing.setStyleSheet(f"color: {C.GREEN if self.status == 'Capturing' else C.TEXT_DIM};")
-        self.lbl_analyzing.setStyleSheet(f"color: {C.PRI if self.status == 'Analyzing' else C.TEXT_DIM};")
-        self.lbl_idle.setStyleSheet(f"color: {C.RED if self.status == 'Idle' else C.TEXT_DIM};")
-        
-        # 3. Telemetry row updates
         render_fps = diag.get("render_fps", 0.0)
         capture_fps = diag.get("capture_fps", 0.0)
         chg_val = diag.get("changes_detected", 0)
-        render_lat = diag.get("render_latency_ms", 0.0)
-        ocr_lat = diag.get("ocr_latency_ms", 0.0)
         res_val = diag.get("resolution", "1920x1080")
-        drops = diag.get("frame_drops", 0)
+        total_lat = (diag.get("capture_latency_ms", 0.0) + diag.get("ocr_latency_ms", 0.0))
         
-        self.lbl_row1.setText(f"FPS: P:{render_fps:.1f} C:{capture_fps:.1f} | CHG:{chg_val}")
-        self.lbl_row2.setText(f"LAT: R:{render_lat:.0f}ms O:{ocr_lat:.0f}ms")
-        self.lbl_row3.setText(f"RES: {res_val} | DRP:{drops}")
-        
-        # 4. Double Buffered Rendering from background QImage
+        if not sharing_active:
+            self.lbl_fps.setText("FPS: 0.0")
+            self.lbl_ocr.setText("OCR: DISABLED")
+            self.lbl_resolution.setText("Resolution: --")
+            self.lbl_latency.setText("Latency: --")
+            self.lbl_changes.setText("Changes: --")
+            
+            dim_style = f"color: {C.TEXT_DIM};"
+            self.lbl_fps.setStyleSheet(dim_style)
+            self.lbl_ocr.setStyleSheet(dim_style)
+            self.lbl_resolution.setStyleSheet(dim_style)
+            self.lbl_latency.setStyleSheet(dim_style)
+            self.lbl_changes.setStyleSheet(dim_style)
+        else:
+            ocr_state = "ACTIVE" if ve._ocr_worker and ve._ocr_worker.is_busy else "IDLE"
+            self.lbl_fps.setText(f"FPS: {capture_fps:.1f}")
+            self.lbl_ocr.setText(f"OCR: {ocr_state}")
+            self.lbl_resolution.setText(f"Resolution: {res_val}")
+            self.lbl_latency.setText(f"Latency: {total_lat:.0f}ms")
+            self.lbl_changes.setText(f"Changes: {chg_val}")
+            
+            std_style = f"color: {C.TEXT_MED};"
+            self.lbl_fps.setStyleSheet(std_style)
+            self.lbl_ocr.setStyleSheet(std_style)
+            self.lbl_resolution.setStyleSheet(std_style)
+            self.lbl_latency.setStyleSheet(std_style)
+            self.lbl_changes.setStyleSheet(std_style)
+            
         if not self.collapsed:
+            if not sharing_active:
+                self.preview_lbl.setPixmap(QPixmap())
+                self.preview_lbl.setText("SCREEN SHARING PAUSED")
+                self.preview_lbl.setStyleSheet(f"background-color: #00080d; border: 1px dashed {C.BORDER}; border-radius: 2px; color: {C.RED}; font-weight: bold;")
+                return
+            
+            self.preview_lbl.setStyleSheet(f"background-color: #000d14; border: 1px solid {C.BORDER}; border-radius: 2px; color: {C.TEXT};")
+            
             if hasattr(self, 'last_rendered_frame_id') and _frame_id == self.last_rendered_frame_id:
-                return  # Skip redundant redraw if frame hasn't changed
+                return
             self.last_rendered_frame_id = _frame_id
             
             with _vision_lock:
@@ -2061,7 +2261,7 @@ class VisionCenterPage(QWidget):
         
         layout.addWidget(hdr_frame)
         
-        # 2. Large Screen Viewer (Consumes ~75-85% of available space)
+        # 2. Large Screen Viewer
         preview_frame = QFrame()
         prev_lay = QVBoxLayout(preview_frame)
         prev_lay.setContentsMargins(4, 4, 4, 4)
@@ -2074,44 +2274,35 @@ class VisionCenterPage(QWidget):
         layout.addWidget(preview_frame, stretch=8)
         
         # 3. Dashboard Footer Layout
-        footer_frame = QFrame()
-        footer_frame.setFixedHeight(95)
-        footer_lay = QHBoxLayout(footer_frame)
+        self.footer_frame = QFrame()
+        self.footer_frame.setFixedHeight(135)
+        footer_lay = QHBoxLayout(self.footer_frame)
         footer_lay.setContentsMargins(8, 6, 8, 6)
         footer_lay.setSpacing(10)
         
-        # Footer Section A: Live Telemetry & Diagnostics
+        # Footer Section A: Live Telemetry & Diagnostics (Stacked Layout)
         diag_box = QFrame()
         diag_box.setStyleSheet(f"border: 1px solid {C.BORDER_A}; background-color: #000d14;")
-        diag_lay = QGridLayout(diag_box)
+        diag_lay = QVBoxLayout(diag_box)
         diag_lay.setContentsMargins(8, 4, 8, 4)
         diag_lay.setSpacing(2)
         
         self.lbl_diag_title = QLabel("DIAGNOSTICS")
         self.lbl_diag_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
         self.lbl_diag_title.setStyleSheet(f"color: {C.PRI};")
-        diag_lay.addWidget(self.lbl_diag_title, 0, 0, 1, 2)
+        diag_lay.addWidget(self.lbl_diag_title)
         
-        self.lbl_diag_fps = QLabel("FPS: P:0.0 / C:0.0")
-        self.lbl_diag_fps.setFont(QFont("Courier New", 7))
-        self.lbl_diag_fps.setStyleSheet(f"color: {C.TEXT_MED};")
-        diag_lay.addWidget(self.lbl_diag_fps, 1, 0)
+        self.lbl_diag_fps = QLabel("FPS: --")
+        self.lbl_diag_ocr = QLabel("OCR: --")
+        self.lbl_diag_res = QLabel("Resolution: --")
+        self.lbl_diag_lat = QLabel("Latency: --")
+        self.lbl_diag_changes = QLabel("Changes: --")
         
-        self.lbl_diag_lat = QLabel("LAT: R:0ms / O:0ms")
-        self.lbl_diag_lat.setFont(QFont("Courier New", 7))
-        self.lbl_diag_lat.setStyleSheet(f"color: {C.TEXT_MED};")
-        diag_lay.addWidget(self.lbl_diag_lat, 1, 1)
-        
-        self.lbl_diag_res = QLabel("RES: 1920x1080")
-        self.lbl_diag_res.setFont(QFont("Courier New", 7))
-        self.lbl_diag_res.setStyleSheet(f"color: {C.TEXT_MED};")
-        diag_lay.addWidget(self.lbl_diag_res, 2, 0)
-        
-        self.lbl_diag_drops = QLabel("DROPS: 0 | CHG: 0")
-        self.lbl_diag_drops.setFont(QFont("Courier New", 7))
-        self.lbl_diag_drops.setStyleSheet(f"color: {C.TEXT_MED};")
-        diag_lay.addWidget(self.lbl_diag_drops, 2, 1)
-        
+        for lbl in (self.lbl_diag_fps, self.lbl_diag_ocr, self.lbl_diag_res, self.lbl_diag_lat, self.lbl_diag_changes):
+            lbl.setFont(QFont("Courier New", 7))
+            lbl.setStyleSheet(f"color: {C.TEXT_MED};")
+            diag_lay.addWidget(lbl)
+            
         footer_lay.addWidget(diag_box, stretch=2)
         
         # Footer Section B: Developer Workspace Monitor
@@ -2185,32 +2376,122 @@ class VisionCenterPage(QWidget):
         action_btn_lay = QHBoxLayout()
         action_btn_lay.setSpacing(4)
         
-        self.btn_pause = QPushButton("⏸ PAUSE")
-        self.btn_pause.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_pause.clicked.connect(self._pause_vision)
-        action_btn_lay.addWidget(self.btn_pause)
-        
-        self.btn_resume = QPushButton("▶ RESUME")
-        self.btn_resume.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_resume.clicked.connect(self._resume_vision)
-        action_btn_lay.addWidget(self.btn_resume)
+        # Cyberpunk toggler
+        self.btn_sharing_toggle = CyberpunkButton("START SHARING", self)
+        self.btn_sharing_toggle.clicked.connect(self.toggle_sharing)
+        action_btn_lay.addWidget(self.btn_sharing_toggle)
         
         self.btn_expand = QPushButton("◈ EXPAND")
         self.btn_expand.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_expand.clicked.connect(self._toggle_expand)
         action_btn_lay.addWidget(self.btn_expand)
         
-        ctrl_lay.addLayout(action_btn_lay)
+        # Accessibility settings Presets
+        self.btn_accessibility = QPushButton("ACCESSIBILITY: NORMAL")
+        self.btn_accessibility.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_accessibility.clicked.connect(self.cycle_accessibility)
+        action_btn_lay.addWidget(self.btn_accessibility)
         
+        ctrl_lay.addLayout(action_btn_lay)
         footer_lay.addWidget(ctrl_box, stretch=2)
         
-        layout.addWidget(footer_frame)
+        layout.addWidget(self.footer_frame)
+        
+        # Register to state manager
+        from actions.vision_engine import VisionStateManager
+        VisionStateManager.get_instance().register_subscriber(self.on_state_changed)
+        
+        # Apply initial preset and view
+        self.apply_preset()
+        self.refresh_ui()
         
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh_ui)
         self.refresh_timer.start(80)
         
         self._update_monitor_buttons_style()
+        
+    def closeEvent(self, event):
+        from actions.vision_engine import VisionStateManager
+        try:
+            VisionStateManager.get_instance().unregister_subscriber(self.on_state_changed)
+        except Exception:
+            pass
+        super().closeEvent(event)
+        
+    def on_state_changed(self):
+        self.refresh_ui()
+        self.apply_preset()
+        
+    def toggle_sharing(self):
+        from actions.vision_engine import VisionStateManager
+        state_mgr = VisionStateManager.get_instance()
+        current = state_mgr.is_sharing_active()
+        state_mgr.set_sharing_active(not current)
+        
+    def cycle_accessibility(self):
+        from actions.vision_engine import VisionStateManager
+        state_mgr = VisionStateManager.get_instance()
+        current = state_mgr.get_accessibility_preset()
+        presets = ["NORMAL", "LARGE", "EXTRA LARGE"]
+        next_idx = (presets.index(current) + 1) % len(presets)
+        state_mgr.set_accessibility_preset(presets[next_idx])
+        
+    def apply_preset(self):
+        from actions.vision_engine import VisionStateManager
+        state_mgr = VisionStateManager.get_instance()
+        preset = state_mgr.get_accessibility_preset()
+        
+        self.btn_accessibility.setText(f"ACCESSIBILITY: {preset}")
+        
+        if preset == "EXTRA LARGE":
+            scale_font = 1.50
+            scale_spacing = 1.50
+            scale_heights = 1.50
+        elif preset == "LARGE":
+            scale_font = 1.25
+            scale_spacing = 1.25
+            scale_heights = 1.25
+        else:
+            scale_font = 1.00
+            scale_spacing = 1.00
+            scale_heights = 1.00
+            
+        fs_hdr = int(12 * scale_font)
+        fs_status = int(10 * scale_font)
+        fs_metrics = int(10 * scale_font)
+        fs_btn = int(11 * scale_font)
+        
+        self.title_lbl.setFont(QFont("Courier New", int(14 * scale_font), QFont.Weight.Bold))
+        self.status_dot.setFont(QFont("Courier New", int(11 * scale_font), QFont.Weight.Bold))
+        self.active_mon_lbl.setFont(QFont("Courier New", int(11 * scale_font), QFont.Weight.Bold))
+        
+        self.lbl_diag_title.setFont(QFont("Courier New", fs_hdr, QFont.Weight.Bold))
+        self.lbl_dev_title.setFont(QFont("Courier New", fs_hdr, QFont.Weight.Bold))
+        
+        self.btn_mon1.setFont(QFont("Courier New", fs_btn, QFont.Weight.Bold))
+        self.btn_mon2.setFont(QFont("Courier New", fs_btn, QFont.Weight.Bold))
+        self.btn_mon_all.setFont(QFont("Courier New", fs_btn, QFont.Weight.Bold))
+        self.btn_expand.setFont(QFont("Courier New", fs_btn, QFont.Weight.Bold))
+        self.btn_accessibility.setFont(QFont("Courier New", fs_btn, QFont.Weight.Bold))
+        
+        for lbl in (self.lbl_diag_fps, self.lbl_diag_ocr, self.lbl_diag_res, self.lbl_diag_lat, self.lbl_diag_changes):
+            lbl.setFont(QFont("Courier New", fs_metrics))
+            
+        for lbl in (self.lbl_dev_file, self.lbl_dev_lang, self.lbl_dev_workspace, self.lbl_dev_issues):
+            lbl.setFont(QFont("Courier New", fs_metrics))
+            
+        self.lbl_preview_img.setFont(QFont("Courier New", int(14 * scale_font)))
+        self.btn_sharing_toggle.set_preset(preset)
+        
+        btn_h = int(24 * scale_heights)
+        self.btn_mon1.setFixedHeight(btn_h)
+        self.btn_mon2.setFixedHeight(btn_h)
+        self.btn_mon_all.setFixedHeight(btn_h)
+        self.btn_expand.setFixedHeight(btn_h)
+        self.btn_accessibility.setFixedHeight(btn_h)
+        
+        self.footer_frame.setFixedHeight(int(135 * scale_heights))
         
     def showEvent(self, event):
         super().showEvent(event)
@@ -2267,56 +2548,86 @@ class VisionCenterPage(QWidget):
     def refresh_ui(self):
         from actions.vision_engine import (
             _vision_lock, _display_frame_center, set_target_center_size,
-            get_diagnostics, get_vision_context, get_selected_monitor, get_vision_service
+            get_diagnostics, get_vision_context, get_selected_monitor, get_vision_service,
+            VisionStateManager
         )
+        import actions.vision_engine as ve
         
+        state_mgr = VisionStateManager.get_instance()
+        sharing_active = state_mgr.is_sharing_active()
+        
+        if sharing_active:
+            self.btn_sharing_toggle.setText("STOP SHARING")
+            self.status_dot.setText("● SCREEN SHARING ACTIVE")
+            self.status_dot.setStyleSheet(f"color: {C.GREEN};")
+        else:
+            self.btn_sharing_toggle.setText("START SHARING")
+            self.status_dot.setText("● SCREEN SHARING DISABLED")
+            self.status_dot.setStyleSheet(f"color: {C.RED};")
+            
         set_target_center_size(self.lbl_preview_img.width(), self.lbl_preview_img.height())
         
-        # 1. Update Preview Image
-        with _vision_lock:
-            qimg = _display_frame_center
-        if qimg is not None and not qimg.isNull():
-            try:
-                pix = QPixmap.fromImage(qimg)
-                self.lbl_preview_img.setPixmap(pix)
-            except Exception:
-                pass
+        if not sharing_active:
+            self.lbl_preview_img.setPixmap(QPixmap())
+            self.lbl_preview_img.setText("SCREEN SHARING PAUSED")
+            self.lbl_preview_img.setStyleSheet("background-color: #00080d; border: 1px dashed #ff3355; border-radius: 4px; color: #ff3355; font-weight: bold;")
         else:
-            self.lbl_preview_img.setText("Awaiting screenshot feed...")
-            
-        # 2. Update Diagnostics & Active Monitor Label
+            self.lbl_preview_img.setStyleSheet("background-color: #00090f; border-radius: 4px; color: #8ffcff;")
+            with _vision_lock:
+                qimg = _display_frame_center
+            if qimg is not None and not qimg.isNull():
+                try:
+                    pix = QPixmap.fromImage(qimg)
+                    self.lbl_preview_img.setPixmap(pix)
+                except Exception:
+                    pass
+            else:
+                self.lbl_preview_img.setText("Awaiting screenshot feed...")
+                
         diag = get_diagnostics()
         ctx = get_vision_context()
         curr_mon = get_selected_monitor()
         mon_str = "All Monitors" if curr_mon == 0 else f"Monitor {curr_mon}"
         self.active_mon_lbl.setText(f"Active Monitor: {mon_str}")
         
-        service = get_vision_service()
-        if service.is_paused():
-            self.status_dot.setText("● PAUSED")
-            self.status_dot.setStyleSheet(f"color: {C.RED};")
-        else:
-            self.status_dot.setText("● ACTIVE")
-            self.status_dot.setStyleSheet(f"color: {C.GREEN};")
-            
         render_fps = diag.get("render_fps", 0.0)
         capture_fps = diag.get("capture_fps", 0.0)
-        render_lat = diag.get("render_latency_ms", 0.0)
-        ocr_lat = diag.get("ocr_latency_ms", 0.0)
         res_val = diag.get("resolution", "1920x1080")
-        drops = diag.get("frame_drops", 0)
         chg_val = diag.get("changes_detected", 0)
+        total_lat = (diag.get("capture_latency_ms", 0.0) + diag.get("ocr_latency_ms", 0.0))
         
-        self.lbl_diag_fps.setText(f"FPS: P:{render_fps:.1f} / C:{capture_fps:.1f}")
-        self.lbl_diag_lat.setText(f"LAT: R:{render_lat:.0f}ms / O:{ocr_lat:.0f}ms")
-        self.lbl_diag_res.setText(f"RES: {res_val}")
-        self.lbl_diag_drops.setText(f"DROPS: {drops} | CHG: {chg_val}")
-        
-        # 3. Update Developer Workspace Monitor
+        if not sharing_active:
+            self.lbl_diag_fps.setText("FPS: 0.0")
+            self.lbl_diag_ocr.setText("OCR: DISABLED")
+            self.lbl_diag_res.setText("Resolution: --")
+            self.lbl_diag_lat.setText("Latency: --")
+            self.lbl_diag_changes.setText("Changes: --")
+            
+            dim_style = f"color: {C.TEXT_DIM};"
+            self.lbl_diag_fps.setStyleSheet(dim_style)
+            self.lbl_diag_ocr.setStyleSheet(dim_style)
+            self.lbl_diag_res.setStyleSheet(dim_style)
+            self.lbl_diag_lat.setStyleSheet(dim_style)
+            self.lbl_diag_changes.setStyleSheet(dim_style)
+        else:
+            ocr_state = "ACTIVE" if ve._ocr_worker and ve._ocr_worker.is_busy else "IDLE"
+            self.lbl_diag_fps.setText(f"FPS: {capture_fps:.1f}")
+            self.lbl_diag_ocr.setText(f"OCR: {ocr_state}")
+            self.lbl_diag_res.setText(f"Resolution: {res_val}")
+            self.lbl_diag_lat.setText(f"Latency: {total_lat:.0f}ms")
+            self.lbl_diag_changes.setText(f"Changes: {chg_val}")
+            
+            std_style = f"color: {C.TEXT_MED};"
+            self.lbl_diag_fps.setStyleSheet(std_style)
+            self.lbl_diag_ocr.setStyleSheet(std_style)
+            self.lbl_diag_res.setStyleSheet(std_style)
+            self.lbl_diag_lat.setStyleSheet(std_style)
+            self.lbl_diag_changes.setStyleSheet(std_style)
+            
         app = ctx.get("current_application", "").lower()
         is_vscode_active = ("code" in app or "visual studio code" in app or ctx.get("current_task") == "Coding")
         
-        if is_vscode_active:
+        if sharing_active and is_vscode_active:
             self.dev_box.setStyleSheet(f"border: 1px solid {C.GREEN}; background-color: #000d14;")
             self.lbl_dev_title.setStyleSheet(f"color: {C.GREEN};")
             self.lbl_dev_file.setText(f"File   : {ctx.get('current_file', 'None')}")
@@ -2572,6 +2883,14 @@ class MainWindow(QMainWindow):
     _show_vision_sig = pyqtSignal(bool)
     _show_proj_intel_sig = pyqtSignal(bool)
     relaunch_preview_widget_signal = pyqtSignal()
+
+    def closeEvent(self, event):
+        try:
+            from memory.memory_engine import MemoryEngine
+            MemoryEngine().end_session()
+        except Exception as e:
+            print(f"[MemoryEngine] Failed to end session on window close: {e}")
+        event.accept()
 
     def __init__(self, face_path: str):
         super().__init__()
