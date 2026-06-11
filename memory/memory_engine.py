@@ -63,7 +63,7 @@ class MemoryEngine:
                 print(f"[MemoryEngine] start_session failed: {e}")
                 return -1
 
-    def end_session(self, session_id: int = None) -> str:
+    def end_session(self, session_id: int = None, skip_llm: bool = False) -> str:
         target_id = session_id if session_id is not None else self.current_session_id
         if target_id is None:
             # Look for active session in DB
@@ -101,7 +101,7 @@ class MemoryEngine:
         if turns:
             chat_log = "\n".join(f"{role.upper()}: {content}" for role, content in turns)
             gemini_key = get_gemini_key()
-            if gemini_key and os.environ.get("NEXUS_TEST_MODE") != "1":
+            if gemini_key and os.environ.get("NEXUS_TEST_MODE") != "1" and not skip_llm:
                 try:
                     from or_client import client
                     prompt = (

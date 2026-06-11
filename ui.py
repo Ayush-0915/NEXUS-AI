@@ -2886,10 +2886,19 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         try:
+            # 1. Stop vision capture and OCR worker
+            import actions.vision_engine as ve
+            ve.stop_vision_mode()
+            
+            # 2. Stop Vision watchdog daemon if initialized
+            if hasattr(ve, "_watchdog_instance") and ve._watchdog_instance is not None:
+                ve._watchdog_instance.stop_watchdog()
+                
+            # 3. End session on window close bypassing slow network LLM summaries
             from memory.memory_engine import MemoryEngine
-            MemoryEngine().end_session()
+            MemoryEngine().end_session(skip_llm=True)
         except Exception as e:
-            print(f"[MemoryEngine] Failed to end session on window close: {e}")
+            print(f"[UI] Error during window close cleanup: {e}")
         event.accept()
 
     def __init__(self, face_path: str):

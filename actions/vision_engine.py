@@ -908,6 +908,11 @@ class OCRWorker(threading.Thread):
         with self.cond:
             self._paused = False
             self.cond.notify_all()
+
+    def stop(self):
+        with self.cond:
+            self._running = False
+            self.cond.notify_all()
         
     def run(self):
         global _last_analysis_time, _context_memory
@@ -1008,6 +1013,7 @@ class ScreenCaptureService:
         self.thread = None
         self._running = False
         self._paused = False
+        self._stop_event = threading.Event()
         self._last_means = None
         self._prev_frame = None
         self._lock = threading.Lock()
@@ -1018,6 +1024,7 @@ class ScreenCaptureService:
                 return
             self._running = True
             self._paused = False
+            self._stop_event.clear()
             
             global _ocr_worker
             if _ocr_worker is None or not _ocr_worker.is_alive():
@@ -1031,6 +1038,7 @@ class ScreenCaptureService:
     def stop(self):
         with self._lock:
             self._running = False
+            self._stop_event.set()
             
     def pause(self):
         with self._lock:
@@ -1060,7 +1068,9 @@ class ScreenCaptureService:
         current_interval = 0.5  # Start with idle
         
         while self._running:
-            time.sleep(current_interval)
+            self._stop_event.wait(timeout=current_interval)
+            if not self._running:
+                break
             
             if self.is_paused():
                 continue
@@ -1201,6 +1211,9 @@ def start_vision_mode():
 
 def stop_vision_mode():
     get_vision_service().stop()
+    global _ocr_worker
+    if _ocr_worker is not None:
+        _ocr_worker.stop()
 
 
 def pause_vision_mode():
@@ -1431,6 +1444,7 @@ class VisionWatchdog(threading.Thread):
         self.interval = interval
         self.ui_app = ui_app
         self._running = False
+        self._stop_event = threading.Event()
         self._lock = threading.Lock()
         
     def start_watchdog(self):
@@ -1438,16 +1452,20 @@ class VisionWatchdog(threading.Thread):
             if self._running:
                 return
             self._running = True
+            self._stop_event.clear()
             self.start()
             log_recovery_event("VisionWatchdog daemon started successfully.")
             
     def stop_watchdog(self):
         with self._lock:
             self._running = False
+            self._stop_event.set()
             
     def run(self):
         while self._running:
-            time.sleep(self.interval)
+            self._stop_event.wait(timeout=self.interval)
+            if not self._running:
+                break
             self.check_components()
 
     def check_components(self):
