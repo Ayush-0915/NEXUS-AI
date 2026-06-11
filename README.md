@@ -15,7 +15,44 @@ NEXUS AI can control desktop environments, write and run software projects auton
 
 ## ⚡ Key Features
 
-NEXUS AI leverages custom action modules combined with a central planning and reasoning engine:
+NEXUS AI leverages custom action modules combined with a central planning, reasoning, and memory architecture:
+
+### 👁️ NEXUS Vision Mode & Vision Center
+* **Aspect-Ratio-Safe Screen Preview**: Displays the live monitor stream keeping native monitor proportions without cropping, stretching, or squashing.
+* **Dynamic Sidebar Widening**: Toggling the `[Expand]` option on the sidebar preview panel dynamically expands the left sidebar width from `250px` to `360px`, magnifying text details so VS Code filenames and browser tabs are visually recognizable.
+* **Vision Center Page**: A dedicated workspace monitoring console that allocates **75-85%** of the page area to a large screen viewer.
+* **Decoupled OCR Processing**: Offloads local winsdk OCR and AST analysis to an independent background worker thread (`OCRWorker`). Capture and rendering run smoothly at 10-15 FPS without stuttering on OCR latency (<100ms text extraction).
+* **Multi-Monitor Switcher**: Sleek dashboard selectors `[M1]` (Monitor 1), `[M2]` (Monitor 2), and `[ALL]` (All Displays/Virtual Desktop) switch inputs dynamically in real time without restarting.
+* **Developer Workspace Monitor**: Automatically extracts active project context, current file, language, and compile errors/warnings when VS Code is in focus.
+* **Self-Healing Watchdog**: A background daemon monitors and auto-heals capture loops and UI widgets.
+* **Unified State Authority**: Utilizes a centralized, global `VisionStateManager` that acts as the single source of truth for screen sharing, accessibility presets, and OCR states.
+
+### 🧠 NEXUS Memory Engine v1.0
+* **Hybrid Storage Architecture**: Relies on SQLite (`nexus_memory.db`) as the relational source of truth, storing metadata, chat turns, workspace snapshots, and a Knowledge Graph, while FAISS handles vector similarity search.
+* **Local Embeddings & Vector Search**: Integrates local SentenceTransformers (`all-MiniLM-L6-v2`) and a FAISS vector index (`nexus_vectors.faiss`) for high-performance semantic memory retrieval (<15ms average latency).
+* **Importance Scoring & Privacy**: Categorizes memories (`CHAT`, `DEVELOPMENT`, `ACTIVITY`, `PROJECT`, `ARCHITECTURE`, `DECISION`, `BUG`, `FEATURE`) with importance scoring (1-10) and privacy tiers (`PUBLIC`, `PRIVATE`, `SYSTEM`).
+* **Memory Consolidation & Aging**: A background consolidation engine compresses repetitive raw logs into bulleted summary entries. A multi-stage aging system promotes memories (`RECENT` -> `SHORT_TERM` -> `LONG_TERM`) based on recall frequency and importance.
+
+### 🔍 Project Intelligence Engine
+* **Automated Codebase Scans**: Recursively crawls directory paths, generates folder trees, analyzes file sizes, and parses Lines of Code (LOC) metrics.
+* **Dependency & Import Maps**: Detects package configs (`package.json`, `requirements.txt`, etc.), extracts build dependencies, and maps module import structures automatically.
+* **Aesthetic Diagnostics**: Evaluates code quality, detects code smells, analyzes system architecture, and outputs dynamic repository compile reports.
+
+### 📊 Self-Analysis & Capability System
+* **AST Codebase Walk**: Background analysis daemon walking local workspace files to parse classes, functions, and tool definitions.
+* **Dynamic Capability Indexes**: Automatically audits and self-records implemented features, updates checkmarks, and writes updated reports to `nexus_capability_index_v1.md`.
+
+### ⏳ Session Recall & Workspace Restore
+* **Workspace Snapshots**: Captures active projects, branch names, and open file stacks, allowing complete state restoration using the `"Continue my last coding session"` recall command.
+* **Natural Language Queries**: Handles complex temporal and topic queries like:
+  * *"What were we working on yesterday?"* (Queries yesterday's sessions and summaries)
+  * *"Continue my last coding session"*
+  * *"Show architecture decisions"* / *"Show Vision Mode history"* / *"What bugs were fixed last week?"*
+  * *"Show project milestones"* (Returns records with importance >= 8)
+
+### 🕸️ Semantic Knowledge Graph
+* **Relational Node-Edge Map**: Relational graph index in SQLite mapping links (`IMPORTS`, `CALLS`, `IMPLEMENTS`) between files, module dependencies, capabilities, sessions, and active APIs.
+* **Dynamic Edge Weighting**: Assigns edge weights and last-updated timestamps dynamically based on import counts and API call frequencies.
 
 ### 🎙️ Low-Latency Voice Connection
 * **Native Audio Streaming**: Integrates Google's Live Connection (`models/gemini-2.5-flash-native-audio-preview-12-2025`) using `sounddevice` for bidirectional spoken conversations.
@@ -24,22 +61,6 @@ NEXUS AI leverages custom action modules combined with a central planning and re
 ### 🖥️ Deep Computer Control & Desktop Automation
 * **System Settings Manager**: Adjusts volume (via `pycaw`), changes screen brightness, scrolls windows, minimizes/maximizes active tabs, locks the computer, takes screenshots, restarts or shuts down the host PC.
 * **Universal Application Launcher**: Launches arbitrary programs, applications, and folders using standard execution paths and user search emulation.
-
-### 🧠 NEXUS Memory Engine v1.0 (Local-First Semantic & Relational Memory)
-* **Local Embeddings & Vector Search**: Integrates local SentenceTransformers (`all-MiniLM-L6-v2`) and a FAISS vector index (`nexus_vectors.faiss`) for high-performance semantic memory retrieval (<15ms average latency).
-* **Hybrid Storage Architecture**: Relies on SQLite (`nexus_memory.db`) as the relational source of truth, storing metadata, chat turns, workspace snapshots, and a Knowledge Graph while FAISS handles vector similarity search.
-* **Importance Scoring & Privacy**: Categorizes memories (`CHAT`, `DEVELOPMENT`, `ACTIVITY`, `PROJECT`, `ARCHITECTURE`, `DECISION`, `BUG`, `FEATURE`) with importance scoring (1-10) and privacy tiers (`PUBLIC`, `PRIVATE`, `SYSTEM`).
-* **Memory Consolidation & Aging**: A background consolidation engine compresses repetitive raw logs into bulleted summary entries. A multi-stage aging system promotes memories (`RECENT` -> `SHORT_TERM` -> `LONG_TERM`) based on recall frequency and importance.
-* **Workspace Snapshots**: Captures active projects, branch names, and open file stacks, allowing complete state restoration.
-* **Knowledge Graph Mappings**: Models connections (nodes/edges) between files, modules, APIs, capabilities, and development sessions.
-* **Natural Language Recall Commands**: Handles complex temporal and topic queries like:
-  * *"What were we working on yesterday?"* (Queries yesterday's sessions and summaries)
-  * *"Continue my last coding session"* (Restores workspace snapshots)
-  * *"Show architecture decisions"* / *"Show Vision Mode history"* / *"What bugs were fixed last week?"*
-
-### 🔍 Real-Time Information & Scraping
-* **Web Search Engine**: Utilizes custom search APIs and scrapers to pull current news, facts, comparisons, and comparisons of products.
-* **Flight Finder & Weather Reports**: Resolves dates/locations dynamically, performs flight searches, and updates local weather interfaces.
 
 ### 🚀 Autonomous Developer Agent & Coding Suite
 * **Dev Agent Core**: A self-contained builder that creates entire software projects locally. It builds, runs, compiles, inspects stdout/stderr, detects issues, writes fixes, and retries up to 5 times until the code runs correctly.
@@ -51,15 +72,6 @@ NEXUS AI leverages custom action modules combined with a central planning and re
 
 ### 🎮 Game Library Management
 * **Launcher Integration**: Detects Steam and Epic Games installations from the Windows Registry to automatically launch, install, or update games from your local library.
-
-### 👁️ NEXUS Vision Mode
-* **Aspect-Ratio-Safe Screen Preview**: Displays the live monitor stream keeping native monitor proportions without cropping, stretching, or squashing.
-* **Dynamic Sidebar Widening**: Toggling the `[Expand]` option on the sidebar preview panel dynamically expands the left sidebar width from `250px` to `360px`, magnifying text details so VS Code filenames and browser tabs are visually recognizable.
-* **Vision Center Page**: A dedicated workspace monitoring console that allocates **75-85%** of the page area to a large screen viewer.
-* **Decoupled OCR Processing**: Offloads local winsdk OCR and AST analysis to an independent background worker thread (`OCRWorker`). Capture and rendering run smoothly at 10-15 FPS without stuttering on OCR latency.
-* **Multi-Monitor Switcher**: Sleek dashboard selectors `[M1]` (Monitor 1), `[M2]` (Monitor 2), and `[ALL]` (All Displays/Virtual Desktop) switch inputs dynamically in real time without restarting.
-* **Developer Workspace Monitor**: Automatically extracts active project context, current file, language, and compile errors/warnings when VS Code is in focus.
-* **Self-Healing Watchdog**: A background daemon monitors and auto-heals capture loops and UI widgets.
 
 ---
 
