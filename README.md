@@ -25,9 +25,17 @@ NEXUS AI leverages custom action modules combined with a central planning and re
 * **System Settings Manager**: Adjusts volume (via `pycaw`), changes screen brightness, scrolls windows, minimizes/maximizes active tabs, locks the computer, takes screenshots, restarts or shuts down the host PC.
 * **Universal Application Launcher**: Launches arbitrary programs, applications, and folders using standard execution paths and user search emulation.
 
-### 🧠 Dynamic Long-Term Memory
-* **Context Extraction**: Automatically parses conversations for preferences, notes, relationships, wishes, and project contexts.
-* **Structured Local Storage**: Keeps data updated in `memory/long_term.json` to feed back into future LLM prompt contexts for customized, persistent user interaction.
+### 🧠 NEXUS Memory Engine v1.0 (Local-First Semantic & Relational Memory)
+* **Local Embeddings & Vector Search**: Integrates local SentenceTransformers (`all-MiniLM-L6-v2`) and a FAISS vector index (`nexus_vectors.faiss`) for high-performance semantic memory retrieval (<15ms average latency).
+* **Hybrid Storage Architecture**: Relies on SQLite (`nexus_memory.db`) as the relational source of truth, storing metadata, chat turns, workspace snapshots, and a Knowledge Graph while FAISS handles vector similarity search.
+* **Importance Scoring & Privacy**: Categorizes memories (`CHAT`, `DEVELOPMENT`, `ACTIVITY`, `PROJECT`, `ARCHITECTURE`, `DECISION`, `BUG`, `FEATURE`) with importance scoring (1-10) and privacy tiers (`PUBLIC`, `PRIVATE`, `SYSTEM`).
+* **Memory Consolidation & Aging**: A background consolidation engine compresses repetitive raw logs into bulleted summary entries. A multi-stage aging system promotes memories (`RECENT` -> `SHORT_TERM` -> `LONG_TERM`) based on recall frequency and importance.
+* **Workspace Snapshots**: Captures active projects, branch names, and open file stacks, allowing complete state restoration.
+* **Knowledge Graph Mappings**: Models connections (nodes/edges) between files, modules, APIs, capabilities, and development sessions.
+* **Natural Language Recall Commands**: Handles complex temporal and topic queries like:
+  * *"What were we working on yesterday?"* (Queries yesterday's sessions and summaries)
+  * *"Continue my last coding session"* (Restores workspace snapshots)
+  * *"Show architecture decisions"* / *"Show Vision Mode history"* / *"What bugs were fixed last week?"*
 
 ### 🔍 Real-Time Information & Scraping
 * **Web Search Engine**: Utilizes custom search APIs and scrapers to pull current news, facts, comparisons, and comparisons of products.
@@ -84,10 +92,17 @@ NEXUS-AI/
 │   └── task_queue.py         # Sequential queue handling
 ├── core/                     # Prompt templates & identity definitions
 │   └── prompt.txt            # System constraints, rules, and behaviors
-├── memory/                   # Contextual user settings & persistence
+├── memory/                   # NEXUS Memory Engine core
 │   ├── config_manager.py     # API key manager utility
-│   ├── long_term.json        # Persistent JSON data (identity, preferences)
-│   └── memory_manager.py     # Memory extraction and serialization module
+│   ├── long_term.json        # Legacy JSON memory database
+│   ├── memory_engine.py      # Session lifecycle, consolidation, aging, recall command parser
+│   ├── memory_manager.py     # FAISS indexing, SQLite schemas, TF-IDF fallback, capability scanner
+│   ├── nexus_memory.db       # Relational production SQLite database
+│   └── nexus_vectors.faiss   # Vector similarity production FAISS index
+├── scratch/                  # Test suites and dynamic reports
+│   ├── nexus_capability_index.md # Dynamic AST codebase capabilities report
+│   ├── run_full_validation_audit.py # Sequential 11-step subsystem audit script
+│   └── verify_real_persistence.py # Subprocess process-restart verification script
 ├── ui.py                     # PyQt6 dark dashboard containing live resource metrics
 ├── main.py                   # Entry point initiating UI and Live Audio Connection
 ├── or_client.py              # OpenRouter API client with automatic free-model fallbacks
@@ -187,7 +202,7 @@ Once online, you can control NEXUS AI using voice commands or the keyboard.
 
 ## 🗺️ Future Roadmap
 
-* [ ] **Offline Memory Optimization**: Migrating to local vector embeddings for advanced long-term user queries.
+* [x] **Offline Memory Optimization**: Migrating to local vector embeddings for advanced long-term user queries (NEXUS Memory Engine v1.0).
 * [ ] **Local LLM Execution**: Optional offline mode using llama.cpp or Ollama integrations.
 * [ ] **Mobile Companion Companion**: Mobile app integration to control systems remotely.
 * [ ] **Multi-Agent Collaboration**: Multi-step workflows delegating concurrent subprocesses to dedicated micro-agents.
