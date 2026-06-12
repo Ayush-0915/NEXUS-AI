@@ -3,6 +3,7 @@ import sys
 import shutil
 import time
 from pathlib import Path
+from datetime import datetime, timedelta
 
 # Force stdout/stderr to UTF-8 to prevent charmap encoding errors
 if hasattr(sys.stdout, 'reconfigure'):
@@ -29,6 +30,8 @@ import memory.memory_engine as me
 # Redirect
 mm.DB_PATH = mm.BASE_DIR / "memory" / "test_nexus_memory.db"
 mm.FAISS_INDEX_PATH = mm.BASE_DIR / "memory" / "test_nexus_vectors.faiss"
+me.DB_PATH = mm.DB_PATH
+me._db_lock = mm._db_lock
 
 # Re-init
 if mm.DB_PATH.exists():
@@ -298,7 +301,7 @@ def run_tests():
     # ----------------------------------------------------
     artifact_dir = mm.BASE_DIR / "artifacts"
     if not artifact_dir.exists():
-        artifact_dir = Path("C:/Users/ayush/.gemini/antigravity-ide/brain/ddb7d8b3-4f78-43c4-a401-c985dd1a25e2")
+        artifact_dir = Path("C:/Users/ayush/.gemini/antigravity-ide/brain/29882686-8390-408a-a77b-98927d4e652c")
         
     validation_report_path = artifact_dir / "walkthrough.md"
     

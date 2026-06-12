@@ -1538,6 +1538,51 @@ def start_global_hotkey_thread(ui):
     threading.Thread(target=hotkey_thread, daemon=True).start()
 
 
+def is_nexus_busy(ui) -> bool:
+    if ui is None:
+        return False
+    try:
+        if hasattr(ui, "hud") and ui.hud is not None:
+            if ui.hud.state in ("THINKING", "PROCESSING", "SPEAKING") or ui.hud.speaking:
+                return True
+    except Exception:
+        pass
+    try:
+        from actions.vision_engine import VisionStateManager
+        if VisionStateManager.get_instance().is_sharing_active():
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def start_memory_cleanup_thread(ui):
+    def run_cleanup():
+        import time
+        time.sleep(5)  # initial delay for startup
+        from memory.memory_engine import MemoryEngine
+        engine = MemoryEngine()
+        
+        while True:
+            try:
+                config = engine.load_cleanup_config()
+                if config.get("automatic_cleanup_enabled", True):
+                    # Check busy state
+                    while is_nexus_busy(ui):
+                        time.sleep(60)
+                    
+                    print("[MemoryEngine] Starting background memory cleanup...")
+                    report = engine.run_memory_cleanup()
+                    print(f"[MemoryEngine] Background cleanup completed: Scanned: {report['memories_scanned']}, Retained: {report['memories_retained']}, Consolidated: {report['memories_consolidated']}, Deleted: {report['memories_deleted']}")
+            except Exception as e:
+                print(f"[MemoryEngine] Background cleanup encountered error: {e}")
+            
+            # Run every 24 hours
+            time.sleep(86400)
+
+    threading.Thread(target=run_cleanup, daemon=True).start()
+
+
 def main():
     import os
     import shutil
@@ -1585,6 +1630,7 @@ def main():
 
     ui = NexusAIUI("face.png")
     start_global_hotkey_thread(ui)
+    start_memory_cleanup_thread(ui)
 
     def runner():
         ui.wait_for_api_key()

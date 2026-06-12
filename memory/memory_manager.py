@@ -65,6 +65,23 @@ def get_embedding_model():
     return _model
 
 
+def ensure_id_map_index(index):
+    if index is None:
+        return None
+    import faiss
+    if isinstance(index, faiss.IndexIDMap) or isinstance(index, faiss.IndexIDMap2):
+        return index
+    
+    new_index = faiss.IndexIDMap(faiss.IndexFlatL2(index.d))
+    if index.ntotal > 0:
+        import numpy as np
+        vectors = np.array([index.reconstruct(i) for i in range(index.ntotal)], dtype='float32')
+        ids = np.arange(index.ntotal, dtype='int64')
+        new_index.add_with_ids(vectors, ids)
+        print(f"[Memory] Migrated legacy flat FAISS index to IndexIDMap with {index.ntotal} vectors.")
+    return new_index
+
+
 def init_faiss():
     global _faiss_index
     if not check_embeddings_available():
@@ -73,12 +90,13 @@ def init_faiss():
         import faiss
         if FAISS_INDEX_PATH.exists():
             try:
-                _faiss_index = faiss.read_index(str(FAISS_INDEX_PATH))
+                loaded = faiss.read_index(str(FAISS_INDEX_PATH))
+                _faiss_index = ensure_id_map_index(loaded)
             except Exception as e:
                 print(f"[Memory] ⚠️ Failed to load FAISS index: {e}, creating new index.")
-                _faiss_index = faiss.IndexFlatL2(384)
+                _faiss_index = faiss.IndexIDMap(faiss.IndexFlatL2(384))
         else:
-            _faiss_index = faiss.IndexFlatL2(384)
+            _faiss_index = faiss.IndexIDMap(faiss.IndexFlatL2(384))
     except Exception as e:
         print(f"[Memory] ⚠️ FAISS initialization error: {e}")
         _faiss_index = None
@@ -178,10 +196,17 @@ def init_db():
                 aging_stage TEXT CHECK (aging_stage IN ('RECENT', 'SHORT_TERM', 'LONG_TERM')) DEFAULT 'RECENT',
                 recall_count INTEGER DEFAULT 0,
                 is_consolidated BOOLEAN DEFAULT 0,
+                is_pinned BOOLEAN DEFAULT 0,
                 source_reference_id INTEGER,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """)
+            
+            # Migration check: add column if database exists but doesn't have it
+            try:
+                cursor.execute("ALTER TABLE semantic_metadata ADD COLUMN is_pinned BOOLEAN DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
             
             conn.commit()
             conn.close()
@@ -496,7 +521,7 @@ forget_memory = forget
 # New Semantic & Relational Database Methods
 # ==========================================
 
-def add_semantic_memory(category: str, content: str, importance_score: int, privacy_mode: str, aging_stage: str = 'RECENT', source_reference_id: int = None) -> int:
+def add_semantic_memory(category: str, content: str, importance_score: int, privacy_mode: str, aging_stage: str = 'RECENT', source_reference_id: int = None, is_pinned: bool = False) -> int:
     import sqlite3
     import numpy as np
 
@@ -524,15 +549,16 @@ def add_semantic_memory(category: str, content: str, importance_score: int, priv
                     if _faiss_index is None:
                         init_faiss()
                     if _faiss_index is not None:
-                        _faiss_index.add(np.expand_dims(emb, axis=0))
+                        _faiss_index = ensure_id_map_index(_faiss_index)
+                        _faiss_index.add_with_ids(np.expand_dims(emb, axis=0), np.array([next_id], dtype='int64'))
                         save_faiss()
                 except Exception as e:
                     print(f"[Memory] Failed to add vector to FAISS: {e}")
 
             cursor.execute("""
-            INSERT INTO semantic_metadata (faiss_id, category, content, importance_score, privacy_mode, aging_stage, source_reference_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (next_id, category, content, importance_score, privacy_mode, aging_stage, source_reference_id))
+            INSERT INTO semantic_metadata (faiss_id, category, content, importance_score, privacy_mode, aging_stage, source_reference_id, is_pinned)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (next_id, category, content, importance_score, privacy_mode, aging_stage, source_reference_id, int(is_pinned)))
 
             conn.commit()
             conn.close()
@@ -632,7 +658,7 @@ def search_semantic_memory_tfidf(query: str, limit: int = 5, category: str = Non
 
             placeholders = ",".join("?" for _ in top_ids)
             cursor.execute(f"""
-            SELECT faiss_id, category, content, importance_score, privacy_mode, aging_stage, recall_count, timestamp
+            SELECT faiss_id, category, content, importance_score, privacy_mode, aging_stage, recall_count, timestamp, is_pinned
             FROM semantic_metadata
             WHERE faiss_id IN ({placeholders})
             """, top_ids)
@@ -648,7 +674,8 @@ def search_semantic_memory_tfidf(query: str, limit: int = 5, category: str = Non
                     "privacy_mode": r[4],
                     "aging_stage": r[5],
                     "recall_count": r[6],
-                    "timestamp": r[7]
+                    "timestamp": r[7],
+                    "is_pinned": bool(r[8])
                 }
 
             retrieved = []
@@ -683,6 +710,8 @@ def search_semantic_memory(query: str, limit: int = 5, category: str = None, inc
         global _faiss_index
         if _faiss_index is None:
             init_faiss()
+        else:
+            _faiss_index = ensure_id_map_index(_faiss_index)
 
         if _faiss_index is None:
             return search_semantic_memory_tfidf(query, limit, category, include_private)
@@ -704,7 +733,7 @@ def search_semantic_memory(query: str, limit: int = 5, category: str = None, inc
 
             placeholders = ",".join("?" for _ in faiss_ids)
             sql = f"""
-            SELECT faiss_id, category, content, importance_score, privacy_mode, aging_stage, recall_count, timestamp
+            SELECT faiss_id, category, content, importance_score, privacy_mode, aging_stage, recall_count, timestamp, is_pinned
             FROM semantic_metadata
             WHERE faiss_id IN ({placeholders})
             """
@@ -730,7 +759,8 @@ def search_semantic_memory(query: str, limit: int = 5, category: str = None, inc
                     "privacy_mode": r[4],
                     "aging_stage": r[5],
                     "recall_count": r[6],
-                    "timestamp": r[7]
+                    "timestamp": r[7],
+                    "is_pinned": bool(r[8])
                 }
 
             retrieved = []

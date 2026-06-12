@@ -57,6 +57,9 @@ print("==========================================================\n")
 engine = MemoryEngine()
 reports = {}
 success_flags = {}
+avg_latency = 0.0
+db_size = 0.0
+search_time = 0.0
 
 # Check embedding availability
 embeddings_ok = mm.check_embeddings_available()
@@ -455,7 +458,8 @@ try:
     # Add to FAISS index directly
     if mm._faiss_index is None:
         mm.init_faiss()
-    mm._faiss_index.add(vectors)
+    ids = np.arange(start_id, start_id + 10000, dtype=np.int64)
+    mm._faiss_index.add_with_ids(vectors, ids)
     mm.save_faiss()
     
     # 2. Insert 1,000 graph nodes in bulk
@@ -578,7 +582,7 @@ print(f"[AUDIT COMPLETE] SUCCESS: {passed_tests}/{total_tests} | READINESS SCORE
 print(f"==========================================================\n")
 
 # Write report markdown
-artifact_dir = Path("C:/Users/ayush/.gemini/antigravity-ide/brain/ddb7d8b3-4f78-43c4-a401-c985dd1a25e2")
+artifact_dir = Path("C:/Users/ayush/.gemini/antigravity-ide/brain/29882686-8390-408a-a77b-98927d4e652c")
 walkthrough_path = artifact_dir / "walkthrough.md"
 
 report_markdown = f"""# NEXUS Memory Engine v1.0 - Comprehensive Validation Audit Report

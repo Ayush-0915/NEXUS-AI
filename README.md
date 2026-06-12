@@ -32,6 +32,8 @@ NEXUS AI leverages custom action modules combined with a central planning, reaso
 * **Local Embeddings & Vector Search**: Integrates local SentenceTransformers (`all-MiniLM-L6-v2`) and a FAISS vector index (`nexus_vectors.faiss`) for high-performance semantic memory retrieval (<15ms average latency).
 * **Importance Scoring & Privacy**: Categorizes memories (`CHAT`, `DEVELOPMENT`, `ACTIVITY`, `PROJECT`, `ARCHITECTURE`, `DECISION`, `BUG`, `FEATURE`) with importance scoring (1-10) and privacy tiers (`PUBLIC`, `PRIVATE`, `SYSTEM`).
 * **Memory Consolidation & Aging**: A background consolidation engine compresses repetitive raw logs into bulleted summary entries. A multi-stage aging system promotes memories (`RECENT` -> `SHORT_TERM` -> `LONG_TERM`) based on recall frequency and importance.
+* **Intelligent Retention & Automatic Cleanup**: Automatically prunes expired low-importance, rarely recalled memories older than 30 days while retaining high-importance memories (score >= 7), user preferences, milestones, and critical bug fixes indefinitely.
+* **Pinned Memory Protection**: Exposes explicit `pin_memory(faiss_id)` and `unpin_memory(faiss_id)` controls to prevent manually pinned memories (preferences, long-term goals, API notes, milestones) from ever being consolidated or deleted during cleanup cycles.
 
 ### 🔍 Project Intelligence Engine
 * **Automated Codebase Scans**: Recursively crawls directory paths, generates folder trees, analyzes file sizes, and parses Lines of Code (LOC) metrics.

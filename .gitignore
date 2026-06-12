@@ -20,3 +20,5 @@ config/nexus_ui_config.json
 scratch/temp_ocr_*.png
 scratch/vision_readiness_report.json
 scratch/capture_output.txt
+memory/cleanup_report.json
+memory/cleanup_report.md

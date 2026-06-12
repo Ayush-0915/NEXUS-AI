@@ -287,7 +287,7 @@ class MemoryEngine:
             except Exception as e:
                 print(f"[MemoryEngine] add_edge error: {e}")
 
-    def add_semantic_memory(self, category: str, content: str, importance_score: int, privacy_mode: str, aging_stage: str = 'RECENT', source_reference_id: int = None) -> int:
+    def add_semantic_memory(self, category: str, content: str, importance_score: int, privacy_mode: str, aging_stage: str = 'RECENT', source_reference_id: int = None, is_pinned: bool = False) -> int:
         # Check category correctness
         valid_cats = {'CHAT', 'DEVELOPMENT', 'ACTIVITY', 'PROJECT', 'ARCHITECTURE', 'DECISION', 'BUG', 'FEATURE'}
         if category not in valid_cats:
@@ -304,7 +304,8 @@ class MemoryEngine:
             importance_score=importance_score,
             privacy_mode=privacy_mode,
             aging_stage=aging_stage,
-            source_reference_id=source_reference_id
+            source_reference_id=source_reference_id,
+            is_pinned=is_pinned
         )
 
     def search_semantic_memory(self, query: str, limit: int = 5, category: str = None, include_private: bool = False) -> list[dict]:
@@ -544,3 +545,458 @@ class MemoryEngine:
         for item in res:
             lines.append(f"- [{item['timestamp']}] ({item['category']}) Importance {item['importance_score']}/10: {item['content']}")
         return "\n".join(lines)
+
+    # ==========================
+    # Memory Retention & Cleanup
+    # ==========================
+    def load_cleanup_config(self) -> dict:
+        config_file = Path(__file__).resolve().parent.parent / "config" / "memory_cleanup_config.json"
+        defaults = {
+            "retention_period_days": 30,
+            "automatic_cleanup_enabled": True,
+            "max_database_size_bytes": None,
+            "dry_run": False,
+            "fragmentation_threshold": 0.15,
+            "deleted_count_since_last_rebuild": 0
+        }
+        if config_file.exists():
+            try:
+                with open(config_file, "r", encoding="utf-8") as f:
+                    user_config = json.load(f)
+                    defaults.update(user_config)
+            except Exception as e:
+                print(f"[MemoryEngine] Failed to load cleanup config: {e}")
+        return defaults
+
+    def save_cleanup_config(self, config: dict) -> None:
+        config_file = Path(__file__).resolve().parent.parent / "config" / "memory_cleanup_config.json"
+        try:
+            config_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_file, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2)
+        except Exception as e:
+            print(f"[MemoryEngine] Failed to save cleanup config: {e}")
+
+    def pin_memory(self, faiss_id: int) -> bool:
+        import sqlite3
+        import memory.memory_manager as mm
+        with mm._db_lock:
+            try:
+                conn = sqlite3.connect(str(mm.DB_PATH))
+                cursor = conn.cursor()
+                cursor.execute("UPDATE semantic_metadata SET is_pinned = 1 WHERE faiss_id = ?", (faiss_id,))
+                success = cursor.rowcount > 0
+                conn.commit()
+                conn.close()
+                if success:
+                    print(f"[MemoryEngine] Successfully pinned memory ID {faiss_id}.")
+                return success
+            except Exception as e:
+                print(f"[MemoryEngine] Failed to pin memory {faiss_id}: {e}")
+                return False
+
+    def unpin_memory(self, faiss_id: int) -> bool:
+        import sqlite3
+        import memory.memory_manager as mm
+        with mm._db_lock:
+            try:
+                conn = sqlite3.connect(str(mm.DB_PATH))
+                cursor = conn.cursor()
+                cursor.execute("UPDATE semantic_metadata SET is_pinned = 0 WHERE faiss_id = ?", (faiss_id,))
+                success = cursor.rowcount > 0
+                conn.commit()
+                conn.close()
+                if success:
+                    print(f"[MemoryEngine] Successfully unpinned memory ID {faiss_id}.")
+                return success
+            except Exception as e:
+                print(f"[MemoryEngine] Failed to unpin memory {faiss_id}: {e}")
+                return False
+
+    def get_database_size_stats(self) -> dict:
+        from memory.memory_manager import DB_PATH, FAISS_INDEX_PATH
+        db_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+        faiss_size = FAISS_INDEX_PATH.stat().st_size if FAISS_INDEX_PATH.exists() else 0
+        return {
+            "sqlite_db_size_bytes": db_size,
+            "faiss_index_size_bytes": faiss_size,
+            "total_size_bytes": db_size + faiss_size
+        }
+
+    def get_last_cleanup_report(self) -> dict:
+        report_file = Path(__file__).resolve().parent / "cleanup_report.json"
+        if report_file.exists():
+            try:
+                with open(report_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"[MemoryEngine] Failed to load last cleanup report: {e}")
+        return {}
+
+    def run_memory_cleanup(self, dry_run=None, force_rebuild=False) -> dict:
+        import sqlite3
+        import numpy as np
+        import memory.memory_manager as mm
+        
+        config = self.load_cleanup_config()
+        retention_days = config.get("retention_period_days", 30)
+        max_size = config.get("max_database_size_bytes", None)
+        frag_threshold = config.get("fragmentation_threshold", 0.15)
+        deleted_since_rebuild = config.get("deleted_count_since_last_rebuild", 0)
+        
+        actual_dry_run = dry_run if dry_run is not None else config.get("dry_run", False)
+        
+        stats_before = self.get_database_size_stats()
+        cutoff_date = datetime.now() - timedelta(days=retention_days)
+        
+        def should_keep_memory(row_dict: dict) -> bool:
+            category = str(row_dict.get("category", "")).upper()
+            content = str(row_dict.get("content", "")).lower()
+            importance = row_dict.get("importance_score", 0)
+            recall = row_dict.get("recall_count", 0)
+            privacy = str(row_dict.get("privacy_mode", "")).upper()
+            
+            # Keep high importance indefinitely
+            if importance >= 7:
+                return True
+                
+            # Keep frequently recalled
+            if recall >= 3:
+                return True
+                
+            # Keep architecture decisions
+            if category in ('ARCHITECTURE', 'DECISION') or "architecture decision" in content:
+                return True
+                
+            # Keep project milestones
+            if "milestone" in content or (category in ('PROJECT', 'FEATURE') and importance >= 8):
+                return True
+                
+            # Keep capabilities
+            if "capability" in content or (category == 'FEATURE' and privacy == 'SYSTEM'):
+                return True
+                
+            # Keep user preferences
+            if "preference" in content or "favorite" in content or "like" in content or "dislike" in content:
+                return True
+                
+            # Keep critical bug fixes
+            if category == 'BUG' or "bug fix" in content or "fixed bug" in content:
+                if "critical" in content or importance >= 7:
+                    return True
+                    
+            return False
+
+        def parse_sqlite_timestamp(ts_str):
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"):
+                try:
+                    return datetime.strptime(ts_str.strip(), fmt)
+                except ValueError:
+                    continue
+            return datetime.now()
+
+        # Connect to SQLite
+        with mm._db_lock:
+            try:
+                conn = sqlite3.connect(str(mm.DB_PATH))
+                cursor = conn.cursor()
+                cursor.execute("""
+                SELECT faiss_id, category, content, importance_score, privacy_mode, aging_stage, recall_count, timestamp, is_pinned
+                FROM semantic_metadata
+                """)
+                rows = cursor.fetchall()
+                conn.close()
+            except Exception as e:
+                print(f"[MemoryEngine] Failed to read memories for cleanup: {e}")
+                rows = []
+
+        total_scanned = 0
+        total_retained = 0
+        total_pinned = 0
+        total_skipped_due_to_pinning = 0
+        to_delete = []
+        
+        # Classify each memory
+        for r in rows:
+            row_dict = {
+                "faiss_id": r[0], "category": r[1], "content": r[2],
+                "importance_score": r[3], "privacy_mode": r[4], "aging_stage": r[5],
+                "recall_count": r[6], "timestamp": r[7], "is_pinned": bool(r[8] if len(r) > 8 else False)
+            }
+            if row_dict["is_pinned"]:
+                total_pinned += 1
+            
+            ts = parse_sqlite_timestamp(row_dict["timestamp"])
+            if ts < cutoff_date:
+                total_scanned += 1
+                if row_dict["is_pinned"]:
+                    total_skipped_due_to_pinning += 1
+                    total_retained += 1
+                elif should_keep_memory(row_dict):
+                    total_retained += 1
+                else:
+                    to_delete.append(row_dict)
+            else:
+                total_retained += 1
+
+        # Consolidation of to_delete memories before actual deletion
+        consolidated_new_count = 0
+        if to_delete and not actual_dry_run:
+            by_cat = {}
+            for item in to_delete:
+                cat = item["category"]
+                if cat not in by_cat:
+                    by_cat[cat] = []
+                by_cat[cat].append(item)
+                
+            for cat, items in by_cat.items():
+                summary_lines = [f"Consolidated stale {cat} memories:"]
+                for it in items:
+                    t_str = str(it["timestamp"])[:16]
+                    summary_lines.append(f"- [{t_str}] {it['content']}")
+                raw_text = "\n".join(summary_lines)
+                
+                summary_text = None
+                # Check LLM availability
+                gemini_key = get_gemini_key()
+                if gemini_key and os.environ.get("NEXUS_TEST_MODE") != "1":
+                    try:
+                        from or_client import client
+                        prompt = (
+                            f"You are the NEXUS Memory Retention Engine. The following low-importance, older memories "
+                            f"of category '{cat}' are being cleaned up. Consolidate them into a single concise "
+                            f"bulleted or paragraph summary that captures their core essence so we don't lose the history.\n\n"
+                            f"Memories:\n{raw_text}\n\n"
+                            f"Consolidated Summary:"
+                        )
+                        summary_text = client.chat(prompt, system="Be extremely concise and direct. Return only the summary text.", max_tokens=300)
+                        summary_text = summary_text.strip()
+                    except Exception as e:
+                        print(f"[MemoryEngine] Offline fallback: LLM consolidation failed: {e}")
+                
+                if not summary_text:
+                    summary_text = raw_text
+                
+                max_importance = max(it["importance_score"] for it in items)
+                privacy = 'PUBLIC'
+                if any(it["privacy_mode"] == 'SYSTEM' for it in items):
+                    privacy = 'SYSTEM'
+                if any(it["privacy_mode"] == 'PRIVATE' for it in items):
+                    privacy = 'PRIVATE'
+                    
+                new_id = self.add_semantic_memory(
+                    category=cat,
+                    content=summary_text,
+                    importance_score=max(4, max_importance),
+                    privacy_mode=privacy,
+                    aging_stage='SHORT_TERM'
+                )
+                
+                if new_id >= 0:
+                    consolidated_new_count += 1
+                    with mm._db_lock:
+                        try:
+                            conn = sqlite3.connect(str(mm.DB_PATH))
+                            cursor = conn.cursor()
+                            cursor.execute("UPDATE semantic_metadata SET is_consolidated = 1 WHERE faiss_id = ?", (new_id,))
+                            conn.commit()
+                            conn.close()
+                        except Exception as e:
+                            print(f"[MemoryEngine] Failed to set is_consolidated for new memory {new_id}: {e}")
+
+        deleted_ids = [item["faiss_id"] for item in to_delete]
+        
+        # Execute deletions if not dry run
+        if deleted_ids and not actual_dry_run:
+            with mm._db_lock:
+                try:
+                    conn = sqlite3.connect(str(mm.DB_PATH))
+                    cursor = conn.cursor()
+                    placeholders = ",".join("?" for _ in deleted_ids)
+                    cursor.execute(f"DELETE FROM semantic_metadata WHERE faiss_id IN ({placeholders})", deleted_ids)
+                    conn.commit()
+                    conn.close()
+                except Exception as e:
+                    print(f"[MemoryEngine] SQLite delete failed: {e}")
+                    
+            # Incremental FAISS removal
+            if mm.check_embeddings_available():
+                try:
+                    import faiss
+                    if mm._faiss_index is None:
+                        mm.init_faiss()
+                    if mm._faiss_index is not None:
+                        mm._faiss_index = mm.ensure_id_map_index(mm._faiss_index)
+                        mm._faiss_index.remove_ids(np.array(deleted_ids, dtype='int64'))
+                        mm.save_faiss()
+                        deleted_since_rebuild += len(deleted_ids)
+                except Exception as e:
+                    print(f"[MemoryEngine] FAISS incremental remove failed: {e}")
+
+        # Enforce max database size
+        pruned_count = 0
+        if max_size and not actual_dry_run:
+            db_stats = self.get_database_size_stats()
+            total_size = db_stats["total_size_bytes"]
+            
+            if total_size > max_size:
+                with mm._db_lock:
+                    try:
+                        conn = sqlite3.connect(str(mm.DB_PATH))
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT faiss_id, category, content, importance_score, privacy_mode, aging_stage, recall_count, timestamp FROM semantic_metadata")
+                        remaining_rows = cursor.fetchall()
+                        
+                        rem_memories = []
+                        for r in remaining_rows:
+                            rem_memories.append({
+                                "faiss_id": r[0], "category": r[1], "content": r[2],
+                                "importance_score": r[3], "privacy_mode": r[4], "aging_stage": r[5],
+                                "recall_count": r[6], "timestamp": r[7]
+                            })
+                            
+                        prunable = [m for m in rem_memories if not should_keep_memory(m)]
+                        prunable.sort(key=lambda x: (x["importance_score"], x["timestamp"]))
+                        
+                        pruned_ids = []
+                        for item in prunable:
+                            if total_size <= max_size:
+                                break
+                            fid = item["faiss_id"]
+                            cursor.execute("DELETE FROM semantic_metadata WHERE faiss_id = ?", (fid,))
+                            pruned_ids.append(fid)
+                            pruned_count += 1
+                            
+                            if len(pruned_ids) % 10 == 0:
+                                conn.commit()
+                                cursor.execute("VACUUM")
+                                total_size = self.get_database_size_stats()["total_size_bytes"]
+                                
+                        conn.commit()
+                        conn.close()
+                        
+                        if pruned_ids and mm.check_embeddings_available():
+                            if mm._faiss_index is not None:
+                                mm._faiss_index = mm.ensure_id_map_index(mm._faiss_index)
+                                mm._faiss_index.remove_ids(np.array(pruned_ids, dtype='int64'))
+                                mm.save_faiss()
+                                deleted_since_rebuild += len(pruned_ids)
+                    except Exception as e:
+                        print(f"[MemoryEngine] Max size enforcement failed: {e}")
+
+        # Vacuum SQLite database to reclaim space
+        if not actual_dry_run:
+            with mm._db_lock:
+                try:
+                    conn = sqlite3.connect(str(mm.DB_PATH))
+                    conn.execute("VACUUM")
+                    conn.close()
+                except Exception as e:
+                    print(f"[MemoryEngine] SQLite VACUUM failed: {e}")
+
+        # Evaluate if full FAISS rebuild is needed
+        rebuilt_faiss = False
+        if mm.check_embeddings_available() and not actual_dry_run:
+            try:
+                import faiss
+                if mm._faiss_index is None:
+                    mm.init_faiss()
+                if mm._faiss_index is not None:
+                    mm._faiss_index = mm.ensure_id_map_index(mm._faiss_index)
+                    total_vectors = mm._faiss_index.ntotal
+                    total_before = total_vectors + deleted_since_rebuild
+                    
+                    frag_ratio = 0.0
+                    if total_before > 0:
+                        frag_ratio = deleted_since_rebuild / total_before
+                        
+                    if frag_ratio >= frag_threshold or force_rebuild:
+                        print(f"[MemoryEngine] FAISS fragmentation ({frag_ratio:.2%}) exceeds threshold ({frag_threshold:.2%}). Rebuilding index...")
+                        with mm._db_lock:
+                            conn = sqlite3.connect(str(mm.DB_PATH))
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT faiss_id, content FROM semantic_metadata")
+                            db_records = cursor.fetchall()
+                            conn.close()
+                            
+                        new_index = faiss.IndexIDMap(faiss.IndexFlatL2(384))
+                        if db_records:
+                            model = mm.get_embedding_model()
+                            if model is not None:
+                                contents = [rec[1] for rec in db_records]
+                                ids = [rec[0] for rec in db_records]
+                                embs = model.encode(contents).astype('float32')
+                                new_index.add_with_ids(embs, np.array(ids, dtype='int64'))
+                                
+                        mm._faiss_index = new_index
+                        mm.save_faiss()
+                        deleted_since_rebuild = 0
+                        rebuilt_faiss = True
+                        print(f"[MemoryEngine] FAISS index successfully rebuilt with {mm._faiss_index.ntotal} vectors.")
+            except Exception as e:
+                print(f"[MemoryEngine] FAISS rebuild check failed: {e}")
+
+        stats_after = self.get_database_size_stats()
+        space_reclaimed = max(0, stats_before["total_size_bytes"] - stats_after["total_size_bytes"])
+        
+        faiss_status = "NOT_AVAILABLE"
+        if mm.check_embeddings_available():
+            if mm._faiss_index is not None:
+                faiss_status = f"CONNECTED (vectors: {mm._faiss_index.ntotal}, mapped)"
+            else:
+                faiss_status = "INITIALIZATION_FAILED"
+                
+        report = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "dry_run": actual_dry_run,
+            "retention_period_days": retention_days,
+            "memories_scanned": total_scanned,
+            "memories_retained": total_retained,
+            "memories_consolidated": len(to_delete),
+            "memories_deleted": len(deleted_ids) + pruned_count,
+            "total_pinned_memories": total_pinned,
+            "total_skipped_due_to_pinning": total_skipped_due_to_pinning,
+            "space_reclaimed_bytes": space_reclaimed,
+            "database_size_before_bytes": stats_before["total_size_bytes"],
+            "database_size_after_bytes": stats_after["total_size_bytes"],
+            "faiss_index_status": faiss_status,
+            "faiss_index_rebuilt": rebuilt_faiss,
+            "deleted_count_since_last_rebuild": deleted_since_rebuild
+        }
+        
+        config["deleted_count_since_last_rebuild"] = deleted_since_rebuild
+        self.save_cleanup_config(config)
+        
+        if not actual_dry_run:
+            try:
+                report_file = Path(__file__).resolve().parent / "cleanup_report.json"
+                with open(report_file, "w", encoding="utf-8") as f:
+                    json.dump(report, f, indent=2)
+                    
+                report_md = Path(__file__).resolve().parent / "cleanup_report.md"
+                md_content = f"""# NEXUS Memory Engine Cleanup Report
+
+**Execution Timestamp**: {report['timestamp']}
+**Dry Run**: {report['dry_run']}
+**Retention Configured**: {report['retention_period_days']} days
+
+## Subsystem Statistics
+
+| Metric | Before Cleanup | After Cleanup | Difference / Details |
+|---|---|---|---|
+| **Total Database Size** | {report['database_size_before_bytes'] / 1024:.2f} KB | {report['database_size_after_bytes'] / 1024:.2f} KB | **{report['space_reclaimed_bytes'] / 1024:.2f} KB Reclaimed** |
+| **Memories Scanned** | — | {report['memories_scanned']} | Older than cutoff date |
+| **Memories Retained** | — | {report['memories_retained']} | Met indefinite retention criteria |
+| **Memories Consolidated** | — | {report['memories_consolidated']} | Low-importance raw items summarized |
+| **Memories Deleted** | — | {report['memories_deleted']} | Expired & pruned database records |
+| **Total Pinned Memories** | — | {report['total_pinned_memories']} | Explicitly pinned memories kept indefinitely |
+| **Skipped due to Pinning** | — | {report['total_skipped_due_to_pinning']} | Stale memories preserved by pinning |
+| **FAISS Index Status** | — | — | `{report['faiss_index_status']}` |
+| **FAISS Index Rebuilt** | — | — | `{report['faiss_index_rebuilt']}` |
+"""
+                with open(report_md, "w", encoding="utf-8") as f:
+                    f.write(md_content)
+            except Exception as e:
+                print(f"[MemoryEngine] Failed to write report files: {e}")
+                
+        return report
